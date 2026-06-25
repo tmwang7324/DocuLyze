@@ -1,9 +1,3 @@
-"use client";
-import { useState, useEffect } from "react";
-import { auth } from "../../_lib/firebase"
-import { signInWithEmailAndPassword, GoogleAuthProvider } from "firebase/auth";
-import { createCSRFToken, createUserSessionOnBackend, getCookie } from "@/_lib/api_with_express";
-
 import LoginForm from "./login_form";
 import Link from "next/link";
 

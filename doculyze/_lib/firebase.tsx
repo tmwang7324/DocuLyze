@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 
 // My web app's client SDK Firebase configuration. Copied from the Firebase console. This should be moved to an environment variable in production for security purposes, but for the sake of simplicity, I'm hardcoding it here for now.
@@ -38,9 +39,6 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
   */
 const auth = getAuth(app);
-
-
-
 
 function googleOAuth(app: FirebaseApp) {
 

@@ -1,20 +1,24 @@
 "use client";
 
-import React from 'react'
+import React, { useActionState, useEffect } from 'react'
 import { auth } from '@/_lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { createRefresh } from '../actions/auth/session';
-import { useRouter } from "next/navigation";
-
+import { SubmitButton } from '@/components/button';
+import { useRouter } from 'next/navigation'; 
 
 const LoginForm = () => {
-  const [errorMessage, setErrorMessage] = React.useState("");
   const router = useRouter();
+  const [errorMessage, setErrorMessage] = React.useState("");
+  const formRef = React.useRef<HTMLFormElement>(null);
 
-  const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  type FormState = {
+    message: string;
+  };
+
+  const handleLoginSubmit = async (prevState: FormState, formData: FormData) =>  {
     try {
-        const formData = new FormData(e.currentTarget);
+        
         // Pass formData to server action
         const email = formData.get("email")?.toString() || '';
         const password = formData.get("password")?.toString() || '';
@@ -25,25 +29,45 @@ const LoginForm = () => {
         const userCredentials = await signInWithEmailAndPassword(auth, email, password);
         const user = userCredentials.user;
         const idToken = await user.getIdToken();
-        
-        
+        const cookie = await createRefresh(password, idToken);
+        // setUser({
+        //         email: user.email || "",
+        //         uid: user.uid || "",
+        //         verified: true
+        //     });
         // Call server action to create session cookie
-        const cookie = await createRefresh(idToken);
-        router.push("/dashboard");
+        //router.push("/dashboard");
+        console.log({message: "success"});
+        return { message: "success" }; // return a success message as the new state
     } catch (error: any) {
         console.log(error.message);
-        setErrorMessage(error.message);
+        return { message: error.message }; // return the new state instead of calling setErrorMessage (that's the whole point of useActionState — it replaces the useState for form result)
     }
   }
+  
+  const [formState, formAction] = useActionState(handleLoginSubmit, {
+    message: ""
+  });
+
+  useEffect(() => {
+    if (formState.message === "success") {
+      // Reset the form after successful login
+      if (formRef.current) {
+        formRef.current.reset();
+      }
+    }
+  }, [formState]);
+
+
   return (
     <div>
-        <form onSubmit={handleLoginSubmit}>
+        <form action={formAction} ref={formRef}>
             <input name="email" type="email" id="email" placeholder="Email"></input>
             <input name="password" type="password" id="password" required minLength={8} placeholder="Password"></input>
-            <button id="submit">Submit</button>
+            <SubmitButton label="Login" loading="Logging in..." />
         </form>
-        {errorMessage && <p>{errorMessage}</p>}
-
+        {formState.message && <p>{formState.message}</p>}
+        
     </div>
   )
 }

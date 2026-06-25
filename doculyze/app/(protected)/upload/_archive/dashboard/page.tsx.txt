@@ -1,0 +1,102 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+// Shape returned by GET /dashboard/api — `uploadedAt` is epoch millis (the
+// route handler normalizes the Firestore Timestamp before sending).
+type DocumentRow = {
+    docId: string;
+    file_name: string;
+    title: string;
+    storagePath: string;
+    contentType: string;
+    size: number;
+    status: "uploaded" | "processing" | "ready" | "failed";
+    version: number;
+    uploadedAt: number | null;
+};
+
+function formatBytes(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export default function Dashboard() {
+    // Access control is handled by app/(protected)/layout.tsx (redirects to
+    // /login), and the route handler itself returns 401 if unauthenticated.
+    const [documents, setDocuments] = useState<DocumentRow[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        fetch("/dashboard/api", { signal: controller.signal })
+            .then(async (res) => {
+                if (!res.ok) {
+                    throw new Error(`Request failed (${res.status})`);
+                }
+                return res.json() as Promise<{ documents: DocumentRow[] }>;
+            })
+            .then((data) => setDocuments(data.documents))
+            .catch((err) => {
+                if (err.name !== "AbortError") setError(err.message);
+            })
+            .finally(() => setLoading(false));
+        return () => controller.abort();
+    }, []);
+
+    return (
+        <div className="p-6">
+            <h1 className="text-2xl font-semibold mb-4">Dashboard</h1>
+
+            {loading && <p>Loading documents…</p>}
+            {error && <p className="text-red-600">Error: {error}</p>}
+
+            {!loading && !error && documents.length === 0 && (
+                <p className="text-gray-500">No documents uploaded yet.</p>
+            )}
+
+            {documents.length > 0 && (
+                <ul className="flex flex-col gap-2">
+                    {documents.map((doc) => (
+                        <li key={doc.docId} className="rounded border px-4 py-3">
+                            <div className="flex items-center justify-between">
+                                <span className="font-medium">{doc.title}</span>
+                                <span className="text-xs uppercase text-gray-500">
+                                    {doc.status}
+                                </span>
+                            </div>
+                            <div className="text-sm text-gray-600">
+                                {doc.file_name} · {formatBytes(doc.size)}
+                                {doc.uploadedAt && (
+                                    <> · {new Date(doc.uploadedAt).toLocaleString()}</>
+                                )}
+                            </div>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </div>
+    );
+// }
+    
+//     if(!await verifyUser()) {
+//         redirect('/login');
+//     }
+
+//     return (
+//         <div>
+//             <h1>Dashboard</h1>
+//             <RenderDocs></RenderDocs>
+//         </div>
+//     )
+
+    
+    
+//     // The code above ensures that only authenticated users can access the dashboard.
+//     // If the user is not authenticated, they are redirected to the login page.
+//     // Next step: Configure firestore and perform a query to fetch the user's uploaded documents here. 
+//     // ENSURE THAT ONLY AUTHENTICATED USERS CAN QUERY (using middleware and DAL).
+//     const ref = documentsCol(uid).doc(); // auto-generated id using a const uid = await requireUid(); Implementing page-level authentication= has no real loopholes, **all** components.= So, the solution was to
+// //prevState: DocFormState,
