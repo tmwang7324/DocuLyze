@@ -1,0 +1,232 @@
+// ============================================================================
+// ARCHIVED — Multi-file drag & drop upload (react-dropzone)
+// ----------------------------------------------------------------------------
+// Pulled out of the MVP on 2026-06-25 in favor of a single-file HTML upload.
+// Kept here for when multi-file upload is reintroduced.
+//
+// This file is named *.tsx.txt on purpose so it is NOT compiled/linted/routed
+// (tsconfig `include` globs every **/*.tsx, and the app router would otherwise
+// try to process it). To restore: split into the two files noted below and
+// rename them back to .tsx.
+//
+// Requires: `npm install react-dropzone`  (v15+, peer range satisfies React 19)
+//
+// Key gotcha worth remembering: react-dropzone keeps selected files in React
+// state, NOT in a DOM <input>, so a plain `<form action={formAction}>` will NOT
+// include them in FormData. The form below uses onSubmit to build FormData
+// manually (appending each file under "files") and dispatches the action via
+// startTransition — the manual-invocation pattern. Trade-off: no progressive
+// enhancement (requires JS), which is fine since dropzone needs JS anyway.
+// ============================================================================
+
+
+// ----------------------------------------------------------------------------
+// FILE 1 — app/actions/document/upload_document.tsx  (multi-file server action)
+// ----------------------------------------------------------------------------
+"use server";
+import { db } from '@/_lib/admin';
+import { doc, setDoc } from 'firebase/firestore';
+import { verifyUser } from '../auth/verify_user';
+import { createDocumentRecord } from '@/_lib/database';
+
+export type UploadedFileInfo = {
+    name: string;
+    size: number;
+    type: string;
+}
+
+export type DocFormState = {
+    message: string;
+    files: UploadedFileInfo[];
+}
+
+
+export async function uploadDocument(prevState: DocFormState, formData: FormData): Promise<DocFormState> {
+    //createDocumentRecord()
+    const title = formData.get('title') as string | null;
+    const files = formData.getAll('files').filter((f): f is File => f instanceof File);
+
+    if (files.length === 0) {
+        return { message: 'error', files: [] };
+    }
+
+    console.log(title, files);
+
+    return {
+        message: 'success',
+        files: files.map((file) => ({
+            name: file.name,
+            size: file.size,
+            type: file.type,
+        })),
+    };
+}
+
+
+// ----------------------------------------------------------------------------
+// FILE 2 — app/(protected)/upload/upload_form.tsx  (react-dropzone client form)
+// ----------------------------------------------------------------------------
+"use client";
+
+import { useActionState, useState, useCallback, startTransition } from "react";
+import { useDropzone, type FileRejection } from "react-dropzone";
+import { uploadDocument } from "../../actions/document/upload_document";
+
+const ACCEPTED_TYPES = {
+    "application/pdf": [".pdf"],
+    "application/msword": [".doc"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+};
+
+const MAX_SIZE = 25 * 1024 * 1024; // 25 MB
+
+function formatBytes(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export default function UploadForm() {
+    const [formState, formAction, isPending] = useActionState(uploadDocument, {
+        message: "",
+        files: [],
+    });
+
+    // react-dropzone keeps selected files in React state — not in a DOM
+    // <input> — so we hold them here and append them to FormData on submit.
+    const [files, setFiles] = useState<File[]>([]);
+    const [rejections, setRejections] = useState<FileRejection[]>([]);
+
+    const onDrop = useCallback(
+        (accepted: File[], fileRejections: FileRejection[]) => {
+            setRejections(fileRejections);
+            setFiles((prev) => {
+                const seen = new Set(prev.map((f) => `${f.name}:${f.size}`));
+                const merged = [...prev];
+                for (const f of accepted) {
+                    const key = `${f.name}:${f.size}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        merged.push(f);
+                    }
+                }
+                return merged;
+            });
+        },
+        []
+    );
+
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+        onDrop,
+        accept: ACCEPTED_TYPES,
+        maxSize: MAX_SIZE,
+    });
+
+    const removeFile = (index: number) => {
+        setFiles((prev) => prev.filter((_, i) => i !== index));
+    };
+
+    const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (files.length === 0) return;
+
+        const formData = new FormData(e.currentTarget);
+        files.forEach((file) => formData.append("files", file));
+
+        // Invoke the action manually (we built FormData ourselves rather than
+        // relying on <form action>), so wrap it in a transition.
+        startTransition(() => formAction(formData));
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 max-w-lg">
+            <input
+                type="text"
+                name="title"
+                placeholder="Enter title here"
+                className="border rounded px-3 py-2"
+            />
+
+            <div
+                {...getRootProps()}
+                className={`flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-6 py-10 text-center cursor-pointer transition-colors ${
+                    isDragActive
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-300 hover:border-gray-400"
+                }`}
+            >
+                <input {...getInputProps()} />
+                {isDragActive ? (
+                    <p className="text-sm text-blue-600">Drop the files here…</p>
+                ) : (
+                    <>
+                        <p className="text-sm">
+                            Drag &amp; drop files here, or click to select
+                        </p>
+                        <p className="text-xs text-gray-500">
+                            PDF, DOC, DOCX up to {formatBytes(MAX_SIZE)}
+                        </p>
+                    </>
+                )}
+            </div>
+
+            {files.length > 0 && (
+                <ul className="flex flex-col gap-2">
+                    {files.map((file, i) => (
+                        <li
+                            key={`${file.name}-${file.size}-${i}`}
+                            className="flex items-center justify-between rounded border px-3 py-2 text-sm"
+                        >
+                            <span className="truncate">
+                                {file.name}{" "}
+                                <span className="text-gray-500">
+                                    ({formatBytes(file.size)})
+                                </span>
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => removeFile(i)}
+                                className="ml-3 text-red-500 hover:text-red-700"
+                            >
+                                Remove
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
+
+            {rejections.length > 0 && (
+                <ul className="text-sm text-red-600">
+                    {rejections.map(({ file, errors }) => (
+                        <li key={file.name}>
+                            {file.name}: {errors.map((e) => e.message).join(", ")}
+                        </li>
+                    ))}
+                </ul>
+            )}
+
+            <button
+                type="submit"
+                disabled={isPending || files.length === 0}
+                className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
+            >
+                {isPending ? "Uploading…" : `Upload ${files.length || ""}`.trim()}
+            </button>
+
+            {formState.message === "success" && formState.files.length > 0 && (
+                <div className="text-sm">
+                    <p className="font-medium">
+                        Uploaded {formState.files.length} file(s):
+                    </p>
+                    <ul className="mt-1 list-disc pl-5">
+                        {formState.files.map((f, i) => (
+                            <li key={`${f.name}-${i}`}>
+                                {f.name} — {formatBytes(f.size)} ({f.type || "unknown"})
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+        </form>
+    );
+}
