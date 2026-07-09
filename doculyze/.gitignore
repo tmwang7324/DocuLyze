@@ -43,3 +43,6 @@ AGENTS.md
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# service account credentials
+serviceAccount.json

@@ -5,7 +5,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import type { ServiceAccount } from "firebase-admin";
-import serviceAccount from "../../serviceAccountKey.json";
+import serviceAccount from "@/serviceAccount.json";
 
 function getRequiredEnv(name: string): string {
     const value = process.env[name];
@@ -17,11 +17,11 @@ function getRequiredEnv(name: string): string {
     return value;
 }
 // i'll migrate this tomorrow to use environment variables instead of the serviceAccountKey.json file
-const serviceAccountFromEnv: ServiceAccount = {
-    projectId: getRequiredEnv("FIREBASE_ADMIN_PROJECT_ID"),
-    privateKey: getRequiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n"),
-    clientEmail: getRequiredEnv("FIREBASE_ADMIN_CLIENT_EMAIL"),
-};
+// const serviceAccountFromEnv: ServiceAccount = {
+//     projectId: getRequiredEnv("FIREBASE_ADMIN_PROJECT_ID"),
+//     privateKey: getRequiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n"),
+//     clientEmail: getRequiredEnv("FIREBASE_ADMIN_CLIENT_EMAIL"),
+// };
 
 
 const adminApp = getApps().length
