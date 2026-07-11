@@ -25,7 +25,7 @@ const RegisterForm = () => {
         if (!idToken) {
             throw new Error("Failed to retrieve ID token from Firebase user");
         }
-        const cookie = await createRefresh(idToken);
+        const cookie = await createRefresh(password, idToken);
         // router.push("/dashboard");
     } catch (error: any) {
         setErrorMessage(error.message);

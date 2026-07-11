@@ -40,3 +40,4 @@ export async function requireUid(checkRevoked = true): Promise<string> {
     return decodedToken?.uid;
 }
 
+

@@ -56,19 +56,27 @@ export async function createDocumentRecord(input: {
     contentType: string;
     size: number;
 }): Promise<string> {
-    const uid = await requireUid();
-    const ref = documentsCol(uid).doc(); // auto-generated id using a const uid = await requireUid(); Implementing page-level authentication= has no real loopholes, **all** components.= So, the solution was to
-    await ref.set({
-        file_name: input.file_name,
-        title: input.title,
-        storagePath: `users/${uid}/documents/${ref.id}`,
-        contentType: input.contentType,
-        size: input.size,
-        status: "uploaded" satisfies DocStatus,
-        version: 1,
-        uploadedAt: FieldValue.serverTimestamp(),
-    });
-    return ref.id;
+    try {
+        const uid = await requireUid();
+        if (!uid) {
+            throw new Error("User not authenticated");
+        }
+        const ref = documentsCol(uid).doc(); // auto-generated id using a const uid = await requireUid(); Implementing page-level authentication= has no real loopholes, **all** components.= So, the solution was to
+        await ref.set({
+            file_name: input.file_name,
+            title: input.title,
+            storagePath: `users/${uid}/documents/${ref.id}`,
+            contentType: input.contentType,
+            size: input.size,
+            status: "uploaded" satisfies DocStatus,
+            version: 1,
+            uploadedAt: FieldValue.serverTimestamp(),
+        });
+        return ref.id;
+    } catch (error) {
+        console.error("Error creating document record:", error);
+        throw error;
+    }
 }
 
 // List the verified user's documents, newest first.

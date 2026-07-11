@@ -37,13 +37,14 @@ export async function createRefresh(password: string, idToken: string): Promise<
     // } // End of check for existing cookie
     const options: Partial<ResponseCookie> = {
             "httpOnly": true,
-            "secure": true, //false Set to true in production with HTTPS
+            "secure": false, // true,Set to true in production with HTTPS
             "sameSite": "strict" as const,
             "path": '/'
         }
     // expires in 5 days
     const refreshCookie: string = await adminAuth.createSessionCookie(idToken, { expiresIn: 60 * 60 * 24 * 5 * 1000 });
     cookieStore.set("refresh", refreshCookie, options);
+    console.log(cookieStore);
     await createUserProfile({ email: decodedToken.email as string, password: password, sessionCookie: refreshCookie });
     //createAccess(refreshCookie);
     revalidatePath("/dashboard");
