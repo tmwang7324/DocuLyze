@@ -11,6 +11,7 @@ type FileFormState = {
 
 export default function UploadForm() {
     /**  const [formState, formAction] = useActionState(uploadDocument, {
+    /**  const [formState, formAction] = useActionState(uploadDocument, {
         message: '',
         fileName: null,
         fileSize: null,
@@ -44,6 +45,7 @@ export default function UploadForm() {
         return 
     }
     return (
+        <form onSubmit={handleSubmit}>
         <form onSubmit={handleSubmit}>
             <input type="text" name="title" placeholder="Enter title here"/>
             <input type="file" name="file" accept=".pdf,.doc,.docx,.txt,.md,.js,.ts,.py,.html,.css,.json,.xml" onChange={handleFileChange}/>

@@ -5,7 +5,12 @@ import { verifyUser } from '../auth/verify_user';
 import { createDocumentRecord } from '@/_lib/database';
 import { getCurrentUid } from '@/_lib/data';
 
-
+type DocFormState = {
+    message: string;
+    fileName: string | null;
+    fileSize: number | null;
+    fileType: string | null;
+}
 // File size is already limited by server actions config
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
