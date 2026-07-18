@@ -22,17 +22,18 @@ function getRequiredEnv(name: string): string {
 //     privateKey: getRequiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n"),
 //     clientEmail: getRequiredEnv("FIREBASE_ADMIN_CLIENT_EMAIL"),
 // };
-
-
-const adminApp = getApps().length
-    ? getApp()
-    : initializeApp({
+let config = {
         credential: cert(serviceAccount as ServiceAccount),
         // Default bucket for getStorage().bucket(). Set FIREBASE_STORAGE_BUCKET
         // in .env.local once the bucket exists (usually <projectId>.firebasestorage.app
         // or <projectId>.appspot.com). Until then, storage uploads will throw.
         storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-    });
+    }
+
+const adminApp = getApps().length
+    ? getApp()
+    : initializeApp(config);
+
 
 const adminAuth = getAuth(adminApp);
 const db = getFirestore(adminApp);

@@ -24,6 +24,8 @@ const getSession = cache(
     }
 );
 
+
+
 // Null when unauthenticated — for read paths that branch or redirect.
 export const getCurrentUid = cache(async (): Promise<string | null> => {
     return (await getSession())?.uid || null;

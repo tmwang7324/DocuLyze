@@ -37,7 +37,6 @@ const LoginForm = () => {
         //     });
         // Call server action to create session cookie
         //router.push("/dashboard");
-        console.log({message: "success"});
         return { message: "success" }; // return a success message as the new state
     } catch (error: any) {
         console.log(error.message);

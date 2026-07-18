@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/header";
 import { AuthProvider } from "./providers";
+import { Toaster } from "sonner";
 import { auth } from "@/_lib/firebase";
 import { verifyUser } from "./actions/auth/verify_user";
 
@@ -37,6 +38,11 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <Header></Header>
         {children}
+        <Toaster
+          richColors
+          position="top-right"
+          toastOptions={{ style: { borderRadius: "12px" } }}
+        />
         </body>
     </AuthProvider>
     </html>

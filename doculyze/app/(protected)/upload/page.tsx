@@ -3,9 +3,7 @@ import { redirect } from 'next/navigation'
 import UploadForm from "./upload_form";
 
 export default async function UploadPage() {
-    if(!await verifyUser()) {
-        redirect('/login');
-    }
+    await verifyUser();
     return (
         <div>
             <h1>Upload Page</h1>

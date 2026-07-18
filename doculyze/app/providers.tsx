@@ -44,7 +44,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             {
                 await auth.signOut();
                 setUser(defaultAuthUser);
-            };
+            }
+            
         };
         verifySession(); // Call the verifySession function to check the session on component mount
 

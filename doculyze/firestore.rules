@@ -1,0 +1,13 @@
+rules_version = '2';
+
+// Deny-all by design: every real access to Firestore in this app goes through the
+// Admin SDK (server actions / DAL), which bypasses these rules entirely. No client
+// SDK ever reads or writes Firestore directly, so there is nothing to allow here.
+// The emulator still requires a rules file to boot.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -10,7 +10,9 @@ export default function UserRegistrationForm() {
         <form> 
             <input type="email" id="email" placeholder="Email" onChange={(e) => setEmail(e.target.value)}></input>
             <input type="password" id="password" placeholder="Password" onChange={(e) => setPassword(e.target.value)}></input>
-            <button id="submit" onClick={async e =>  {
+            
+            
+            {/* <button id="submit" onClick={async e =>  {
                 e.preventDefault()
                 await fetch("http://localhost:1234/api/userRegistration", {
                     method: "POST",
@@ -19,7 +21,7 @@ export default function UserRegistrationForm() {
                     },
                     body: JSON.stringify({email, password})
                 });
-            }} >Submit</button>
+            }} >Submit</button> */}
         </form>
 
     );

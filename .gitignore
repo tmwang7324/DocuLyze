@@ -1,0 +1,9 @@
+# Firebase Admin credentials — never commit, anywhere in the tree
+serviceAccountKey.json
+**/serviceAccountKey.json
+serviceAccount.json
+**/serviceAccount.json
+
+# Firebase emulator debug logs
+*-debug.log
+**/*-debug.log

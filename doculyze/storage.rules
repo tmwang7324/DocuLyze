@@ -1,0 +1,13 @@
+rules_version = '2';
+
+// Deny-all by design. Browsers never touch Storage through the client SDK — the
+// only client access is a v4 presigned PUT (its own auth, outside these rules),
+// and all server-side access uses the Admin SDK, which bypasses rules. The
+// emulator still requires a rules file to boot.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

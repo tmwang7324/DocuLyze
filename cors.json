@@ -1,0 +1,15 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000",
+      "https://doculyze.web.app",
+      "https://doculyze.firebaseapp.com"
+    ],
+    "method": ["PUT"],
+    "responseHeader": [
+      "Content-Type",
+      "x-goog-content-length-range"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

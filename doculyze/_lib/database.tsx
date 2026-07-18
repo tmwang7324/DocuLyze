@@ -4,9 +4,10 @@ import { db } from "@/_lib/admin";
 import { requireUid } from "@/_lib/data";
 import { createHash } from 'crypto';
 
+
 // Lifecycle of a document ref. The first-upload slice only ever sets "uploaded";
 // "processing" / "ready" / "failed" arrive with the RAG ingest pipeline later.
-export type DocStatus = "uploaded" | "processing" | "ready" | "failed";
+export type DocStatus = "uploaded" | "processing" | "ready" | "failed" | "pending" | "";
 
 
 export type DocumentRecord = {
@@ -50,36 +51,61 @@ export async function createUserProfile(input: {
     return uid;
 }
 
-export async function createDocumentRecord(input: {
+// Storage object path for a user's document, keyed by the server docId (NOT the
+// filename): users/{uid}/documents/{docId}. This is the ONE place the path formula
+// lives — the signer, the metadata verify, and the Firestore record all call it, so
+// they can't drift and same-name uploads can't collide.
+export function documentStoragePath(uid: string, docId: string): string {
+    return `users/${uid}/documents/${docId}`;
+}
+
+
+
+export async function mintDocumentRecord(input: {
     file_name: string;
     title: string;
     contentType: string;
     size: number;
-}): Promise<string> {
-    try {
-        const uid = await requireUid();
-        if (!uid) {
-            throw new Error("User not authenticated");
-        }
-        const ref = documentsCol(uid).doc(); // auto-generated id using a const uid = await requireUid(); Implementing page-level authentication= has no real loopholes, **all** components.= So, the solution was to
-        await ref.set({
-            file_name: input.file_name,
-            title: input.title,
-            storagePath: `users/${uid}/documents/${ref.id}`,
-            contentType: input.contentType,
-            size: input.size,
-            status: "uploaded" satisfies DocStatus,
-            version: 1,
-            uploadedAt: FieldValue.serverTimestamp(),
-        });
-        return ref.id;
-    } catch (error) {
-        console.error("Error creating document record:", error);
-        throw error;
-    }
+    status: string;
+}): Promise<{ docId: string; storagePath: string }> {
+    const uid = await requireUid();
+    const docId = documentsCol(uid).doc().id;
+    const storagePath = documentStoragePath(uid, docId);
+    await documentsCol(uid).doc(docId).set({
+        docId: docId,
+        file_name: input.file_name,
+        title: input.title,
+        storagePath: storagePath,
+        contentType: input.contentType,
+        size: input.size,
+        version: 1,
+        status: input.status,
+        uploadedAt: FieldValue.serverTimestamp(),
+    });
+    return { docId, storagePath: storagePath };
 }
 
-// List the verified user's documents, newest first.
+export async function finalizeDocumentRecord(input: {
+    docId: string;
+    file_name: string;
+    title: string;
+    size: number;
+    status: string;
+}): Promise<void> {
+    const uid = await requireUid();
+    await documentsCol(uid).doc(input.docId).update({
+        file_name: input.file_name,
+        title: input.title,
+        size: input.size,
+        status: input.status,
+        uploadedAt: FieldValue.serverTimestamp(),
+    });
+}
+
+// List the verified user's documents, newest first. Returns EVERY lifecycle state
+// (pending / uploaded / failed / …) so the dashboard can render them distinguishably
+// (#2 checkbox 5). The previous status == "uploaded" filter hid pending and failed,
+// which made abandoned and rejected uploads invisible to their own owner.
 export async function listDocuments(): Promise<DocumentRecord[]> {
     const uid = await requireUid(false);
     const snap = await documentsCol(uid).orderBy("uploadedAt", "desc").get();
