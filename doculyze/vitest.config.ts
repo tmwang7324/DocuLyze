@@ -19,6 +19,10 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
+    // All test files share ONE emulator instance, and each file's beforeEach
+    // wipes it (resetEmulators). Parallel files would wipe each other's data
+    // mid-test — run files sequentially.
+    fileParallelism: false,
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup/emulator-env.ts"],
     // These point every Firebase call at the local emulators. As long as the

@@ -1,5 +1,5 @@
 import { Timestamp } from "firebase-admin/firestore";
-import { listDocuments } from "@/_lib/database";
+import { listDocuments, reapStalePendingDocuments } from "@/_lib/database";
 
 function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -12,6 +12,15 @@ function formatBytes(bytes: number) {
 // no /dashboard/api round-trip, and nothing to serialize. Access control is
 // handled by app/(protected)/layout.tsx.
 export default async function Dashboard() {
+    // Opportunistic reap (#3): there's no scheduler in this stack yet, so the
+    // dashboard visit is the trigger — abandoned `pending` uploads older than
+    // the threshold are cleaned up right before the list is read, so ghost
+    // uploads never render. Usually a no-op (one indexed query, empty result).
+    // Best-effort: a reap failure (e.g. index not yet deployed) must degrade to
+    // ghosts-still-visible, never a broken dashboard.
+    await reapStalePendingDocuments().catch((error) => {
+        console.error("Stale-pending reap failed (dashboard renders anyway):", error);
+    });
     const documents = await listDocuments();
 
     return (

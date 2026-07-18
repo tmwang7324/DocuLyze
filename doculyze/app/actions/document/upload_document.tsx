@@ -1,6 +1,6 @@
 "use server";
 import { storage } from '@/_lib/admin';
-import { newDocumentPath, finalizeDocumentRecord, documentStoragePath, mintDocumentRecord } from '@/_lib/database';
+import { finalizeDocumentRecord, documentStoragePath, mintDocumentRecord } from '@/_lib/database';
 import { getCurrentUid } from '@/_lib/data';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -30,13 +30,13 @@ export async function getPresignedUrl(
     if (contentType === null) {
         throw new Error("Unsupported file type.");
     }
+    
     try {
         const uid = await getCurrentUid();
         if (!uid) {
             redirect("/login");
         }
         const bucket = storage.bucket(process.env.FIREBASE_STORAGE_BUCKET);
-        
         const { docId, storagePath } = await mintDocumentRecord({
             file_name: fileName,
             title,
@@ -45,7 +45,6 @@ export async function getPresignedUrl(
             status: "pending"
         }); 
         const file = bucket.file(storagePath);
-
         const [url] = await file.getSignedUrl({
             action: 'write',
             version: 'v4',
@@ -60,7 +59,7 @@ export async function getPresignedUrl(
         return { url, docId, contentType };
     } catch (error) {
         console.error("Error generating presigned URL:", error);
-        throw error;
+        return { url: "", docId: "", contentType: "" };
     }
 }
 
@@ -91,7 +90,9 @@ export async function finalizeUpload(
         }
         const [metadata] = await file.getMetadata();
         const actualSize = Number(metadata.size ?? 0);
-        const actualType = metadata.contentType ?? "application/octet-stream";
+        const actualType = resolveContentType(metadata.name || '') ?? 'application/octet-stream';
+    
+        
         // Storage is the source of truth for size — reject if the client's claim doesn't match.
         if (actualSize !== size) {
             await finalizeDocumentRecord({ docId, file_name: fileName, title, contentType: actualType, size: actualSize, status: "failed" });

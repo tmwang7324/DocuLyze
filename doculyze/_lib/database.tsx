@@ -1,6 +1,6 @@
 import "server-only";
-import { FieldValue } from "firebase-admin/firestore";
-import { db } from "@/_lib/admin";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { db, storage } from "@/_lib/admin";
 import { requireUid } from "@/_lib/data";
 import { createHash } from 'crypto';
 
@@ -89,6 +89,7 @@ export async function finalizeDocumentRecord(input: {
     docId: string;
     file_name: string;
     title: string;
+    contentType: string;
     size: number;
     status: string;
 }): Promise<void> {
@@ -96,10 +97,63 @@ export async function finalizeDocumentRecord(input: {
     await documentsCol(uid).doc(input.docId).update({
         file_name: input.file_name,
         title: input.title,
+        contentType: input.contentType,
         size: input.size,
         status: input.status,
         uploadedAt: FieldValue.serverTimestamp(),
     });
+}
+
+// A pending record is "stale" once it's older than this. Must stay comfortably
+// above the 15-minute signed-URL expiry (upload_document.tsx): past expiry no
+// new PUT can start, so a pending record this old can only be an abandoned
+// upload — never one still in flight (#3 checkbox 4).
+export const STALE_PENDING_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+
+// Reap the verified user's abandoned uploads: pending records older than the
+// age threshold. Selection is an indexed Firestore query on status + uploadedAt
+// (composite index in firestore.indexes.json) — never a bucket walk.
+//
+// Per stale record: the record is deleted FIRST, guarded by a lastUpdateTime
+// precondition, and only then the Storage object. The precondition is the race
+// guard against a late finalize (finalize has no time bound — only the PUT is
+// limited by the 15-min URL): whichever of finalize-update / reap-delete lands
+// first at Firestore wins, so we can never delete the bytes of a record that
+// just became `uploaded`. Record-first ordering is what makes that guard
+// protect the OBJECT too — object-first would delete bytes before the
+// precondition could veto. The cost: a crash between the two deletes strands
+// an unreachable Storage object (invisible, pennies) instead of a pending
+// record retried next pass — the user-visible orphan (an `uploaded` record
+// with no bytes) is the one this ordering makes impossible.
+// Returns the number of records reaped.
+export async function reapStalePendingDocuments(): Promise<number> {
+    // checkRevoked off, despite being a write: reap rides the dashboard's hot
+    // read path, and it only ever deletes the caller's own already-abandoned
+    // pending records — nothing a revoked session could gain from.
+    const uid = await requireUid(false);
+    const cutoff = Timestamp.fromMillis(Date.now() - STALE_PENDING_MAX_AGE_MS);
+    const stale = await documentsCol(uid)
+        .where("status", "==", "pending")
+        .where("uploadedAt", "<=", cutoff)
+        .get();
+    let reaped = 0;
+    for (const doc of stale.docs) {
+        const storagePath = doc.get("storagePath") as string;
+        try {
+            await doc.ref.delete({ lastUpdateTime: doc.updateTime });
+        } catch {
+            // Precondition failed: the record changed since the query (e.g. a
+            // late finalize flipped it). It's no longer ours to reap — and its
+            // bytes are untouched.
+            continue;
+        }
+        await storage
+            .bucket(process.env.FIREBASE_STORAGE_BUCKET)
+            .file(storagePath)
+            .delete({ ignoreNotFound: true }); // "if the bytes landed" — a never-PUT upload has no object
+        reaped++;
+    }
+    return reaped;
 }
 
 // List the verified user's documents, newest first. Returns EVERY lifecycle state

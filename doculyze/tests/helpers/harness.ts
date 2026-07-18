@@ -1,3 +1,4 @@
+import { Timestamp } from "firebase-admin/firestore";
 import { adminApp, db, storage } from "@/_lib/admin";
 
 // Reset must target the SAME projectId the Admin SDK actually reads/writes under,
@@ -54,6 +55,29 @@ export async function seedStorageObject(
 ): Promise<void> {
   const bytes = Buffer.isBuffer(contents) ? contents : Buffer.from(contents);
   await storage.bucket().file(storagePath).save(bytes, { contentType, resumable: false });
+}
+
+// --- Record aging -----------------------------------------------------------
+// Backdate a record's uploadedAt so it reads as minted `ageMs` ago. The reap's
+// staleness cutoff compares against uploadedAt, so tests can age a record past
+// the threshold without actually waiting.
+export async function backdateDocument(
+  uid: string,
+  docId: string,
+  ageMs: number
+): Promise<void> {
+  await db
+    .collection("users")
+    .doc(uid)
+    .collection("documents")
+    .doc(docId)
+    .update({ uploadedAt: Timestamp.fromMillis(Date.now() - ageMs) });
+}
+
+// Does an object exist at this exact storage path?
+export async function storageObjectExists(storagePath: string): Promise<boolean> {
+  const [exists] = await storage.bucket().file(storagePath).exists();
+  return exists;
 }
 
 // --- Firestore read convenience --------------------------------------------
