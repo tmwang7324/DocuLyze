@@ -5,6 +5,7 @@ import { getCurrentUid } from '@/_lib/data';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { validateUploadClaim, resolveContentType, MIN_FILE_SIZE, MAX_FILE_SIZE } from '@/_lib/fileupload_schema';
+import { publishIngestJob } from '@/_lib/ingest_broker';
 
 type DocFormState = {
     message: string;
@@ -26,11 +27,10 @@ export async function getPresignedUrl(
     // the client's file.type (see GRILL Q6). This is what gets signed, echoed by the
     // client's PUT header, and stored on the object. (The zod claim already rejected
     // unknown extensions; this narrows null away and pins the exact value we sign.)
-    const contentType = resolveContentType(fileName);
+    const contentType = resolveContentType(fileName) // ?? 'application/octet-stream'; 
     if (contentType === null) {
         throw new Error("Unsupported file type.");
     }
-    
     try {
         const uid = await getCurrentUid();
         if (!uid) {
@@ -76,6 +76,7 @@ export async function finalizeUpload(
     docId: string,
     fileName: string,
     size: number,
+    contentType: string,
     title: string): Promise<void> {
     const uid = await getCurrentUid();
     if (!uid) {
@@ -90,19 +91,26 @@ export async function finalizeUpload(
         }
         const [metadata] = await file.getMetadata();
         const actualSize = Number(metadata.size ?? 0);
-        const actualType = resolveContentType(metadata.name || '') ?? 'application/octet-stream';
-    
         
         // Storage is the source of truth for size — reject if the client's claim doesn't match.
         if (actualSize !== size) {
-            await finalizeDocumentRecord({ docId, file_name: fileName, title, contentType: actualType, size: actualSize, status: "failed" });
+            await finalizeDocumentRecord({ docId, file_name: fileName, title, contentType: contentType, size: actualSize, status: "failed" });
             throw new Error(`Size mismatch: client claimed ${size}, storage has ${actualSize}.`);
         }
-        await finalizeDocumentRecord({ docId, file_name: fileName, title, contentType: actualType, size: actualSize, status: "uploaded" });
+        await finalizeDocumentRecord({ docId, file_name: fileName, title, contentType: contentType, size: actualSize, status: "uploaded" });
         revalidatePath('/dashboard');
     } catch (error) {
         console.error("Error finalizing upload:", error);
         throw error;
+    }
+    // Flip-then-publish, swallow-and-log (GRILL 2026-07-18): the record is already
+    // `uploaded`, so a broker outage must never surface as a failed upload — the
+    // doc is visibly stuck-but-recoverable, not lost. Hence this sits OUTSIDE the
+    // rethrowing catch above, in its own. Re-publish sweep is out of scope (#9 sibling).
+    try {
+        await publishIngestJob(uid, docId);
+    } catch (err) {
+        console.error("ingest enqueue failed; doc stuck at uploaded:", docId, err);
     }
 }
 

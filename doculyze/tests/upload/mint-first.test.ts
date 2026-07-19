@@ -63,7 +63,7 @@ describe("#2 mint-first lifecycle — server-actions seam", () => {
     });
     await seedStorageObject(storagePath, "abc", "text/plain"); // exactly 3 bytes
 
-    await finalizeUpload(docId, "notes.txt", 3, "Notes");
+    await finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes");
 
     const rec = await readDocumentRecord(UID, docId);
     expect(rec?.status).toBe("uploaded");
@@ -81,7 +81,7 @@ describe("#2 mint-first lifecycle — server-actions seam", () => {
     });
     await seedStorageObject(storagePath, "abc", "text/plain"); // actual = 3 bytes
 
-    await expect(finalizeUpload(docId, "notes.txt", 999, "Notes")).rejects.toThrow(/mismatch/i);
+    await expect(finalizeUpload(docId, "notes.txt", 999, "text/plain", "Notes")).rejects.toThrow(/mismatch/i);
 
     const rec = await readDocumentRecord(UID, docId);
     expect(rec?.status).toBe("failed"); // record written, not vanished
@@ -104,8 +104,8 @@ describe("#2 mint-first lifecycle — server-actions seam", () => {
     });
     await seedStorageObject(storagePath, "abc", "text/plain");
 
-    await finalizeUpload(docId, "notes.txt", 3, "Notes");
-    await finalizeUpload(docId, "notes.txt", 3, "Notes"); // replay
+    await finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes");
+    await finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes"); // replay
 
     const rec = await readDocumentRecord(UID, docId);
     expect(rec?.status).toBe("uploaded");
@@ -158,7 +158,7 @@ describe("#2 mint-first lifecycle — server-actions seam", () => {
 
     // User B tries to finalize A's docId.
     authAs("user-b");
-    await expect(finalizeUpload(docId, "secret.txt", 3, "Secret")).rejects.toThrow();
+    await expect(finalizeUpload(docId, "secret.txt", 3, "text/plain", "Secret")).rejects.toThrow();
 
     // A's record is untouched, and B has no record at all.
     expect((await readDocumentRecord("user-a", docId))?.status).toBe("pending");

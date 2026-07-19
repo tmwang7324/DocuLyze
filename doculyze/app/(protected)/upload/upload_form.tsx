@@ -75,7 +75,7 @@ export default function UploadForm() {
         // return;
         try {
         setFileObj(prev => ({ ...prev, uploading: true }));
-        await new Promise((resolve, reject) => {
+        await new Promise<string>((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.upload.onprogress = (event) => {
                 if(event.lengthComputable) {
@@ -87,7 +87,7 @@ export default function UploadForm() {
                 if(xhr.status >= 200 && xhr.status < 300) {
                     // Bytes landed — now write the Firestore record (record-after-upload).
                     try {
-                        await finalizeUpload(docId, file.name, file.size, title ?? "");
+                        await finalizeUpload(docId, file.name, file.size, contentType, title ?? "");
                     } catch (err) {
                         setFileObj(prev => ({ ...prev, uploading: false }));
                         

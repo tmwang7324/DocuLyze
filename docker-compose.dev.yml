@@ -1,0 +1,14 @@
+# Dev-E2E override (grill 2026-07-18, "Option A"): point the containerized worker
+# at the HOST's Firestore emulator so it sees the same records `npm run dev` writes
+# (.env.local emulates Firestore only; Storage stays real, so the credential mount
+# in the base file is still required — the worker reads real GCS bytes while its
+# only writes, Firestore status transitions, land in the emulator).
+#
+#   npm run emulators                     # host: firestore on 0.0.0.0:8085
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Emulator hosts live ONLY here — never in the image or the base compose file.
+services:
+  ingest-worker:
+    environment:
+      FIRESTORE_EMULATOR_HOST: host.docker.internal:8085

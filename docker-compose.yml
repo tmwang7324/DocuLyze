@@ -1,0 +1,35 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: doculyze-rabbit
+    environment:
+      RABBITMQ_DEFAULT_USER: doculyze
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-devpass}
+    ports:
+      - "127.0.0.1:5672:5672"     # AMQP — localhost only
+      - "127.0.0.1:15672:15672"   # management UI — localhost only
+    networks: [ingest]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ingest-worker:
+    build: ./ingest-worker
+    environment:
+      RABBITMQ_URL: amqp://doculyze:${RABBITMQ_PASS:-devpass}@rabbitmq:5672
+      INGEST_QUEUE: doc.ingest
+      FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-doculyze.firebasestorage.app}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/serviceAccount.json
+    volumes:
+      # Credentials are mounted, never baked into the image.
+      - ./doculyze/serviceAccount.json:/run/secrets/serviceAccount.json:ro
+    networks: [ingest]      # no `ports:` — internal only
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+networks:
+  ingest:
+    driver: bridge
