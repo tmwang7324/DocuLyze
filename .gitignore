@@ -7,3 +7,6 @@ serviceAccount.json
 # Firebase emulator debug logs
 *-debug.log
 **/*-debug.log
+
+# code-explainer HTML output (build artifacts, not source)
+code-explanations/

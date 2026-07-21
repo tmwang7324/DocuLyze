@@ -5,6 +5,8 @@ failures become status `failed` and RETURN (the consumer acks); infrastructure
 failures RAISE (the consumer nacks to the DLQ). The only Firestore side effects
 this ticket are the status writes; parsed text is held in memory and discarded
 (persisting it + `processing -> ready` is ticket #5).
+
+MAIN INGESTING FUNCTION (entry point for processing a single document)
 """
 
 import logging
@@ -49,3 +51,4 @@ def run_ingest_job(envelope: dict) -> None:
 
     # Good file: ENDS at `processing` (ticket #5 takes it to `ready`).
     log.info("parsed %s/%s: %d chars (held in memory only)", uid, doc_id, len(text))
+    snap = None  # discard the snapshot to free memory

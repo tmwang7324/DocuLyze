@@ -5,7 +5,8 @@ import { getCurrentUid } from '@/_lib/data';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { validateUploadClaim, resolveContentType, MIN_FILE_SIZE, MAX_FILE_SIZE } from '@/_lib/fileupload_schema';
-import { publishIngestJob } from '@/_lib/ingest_broker';
+import { publishIngestJob, IngestConfirmTimeoutError, IngestDisabledError } from '@/_lib/ingest_broker';
+import type { FinalizeResult } from '@/_lib/ingest_contract';
 
 type DocFormState = {
     message: string;
@@ -77,7 +78,7 @@ export async function finalizeUpload(
     fileName: string,
     size: number,
     contentType: string,
-    title: string): Promise<void> {
+    title: string): Promise<FinalizeResult> {
     const uid = await getCurrentUid();
     if (!uid) {
         redirect("/login");
@@ -107,10 +108,27 @@ export async function finalizeUpload(
     // `uploaded`, so a broker outage must never surface as a failed upload — the
     // doc is visibly stuck-but-recoverable, not lost. Hence this sits OUTSIDE the
     // rethrowing catch above, in its own. Re-publish sweep is out of scope (#9 sibling).
+    // Issue #10: the outcome is no longer swallowed silently — finalize returns the
+    // three-way classification so the progress screen can be honest about it:
+    //   queued  — broker durably confirmed; open the stream, run the step view.
+    //   unknown — confirm timeout; the envelope MAY have landed (never say "failed").
+    //   failed  — definitely not enqueued (broker down / ingest disabled); the #9
+    //             sweep remains the recovery owner. Record stays `uploaded` always.
     try {
         await publishIngestJob(uid, docId);
+        return { enqueue: "queued" };
     } catch (err) {
+        if (err instanceof IngestConfirmTimeoutError) {
+            console.warn("ingest enqueue outcome unknown (confirm timeout):", docId);
+            return { enqueue: "unknown" };
+        }
+        if (err instanceof IngestDisabledError) {
+            // Expected in broker-less dev — definite non-enqueue, but not an error.
+            console.info("ingest disabled; doc rests at uploaded:", docId);
+            return { enqueue: "failed" };
+        }
         console.error("ingest enqueue failed; doc stuck at uploaded:", docId, err);
+        return { enqueue: "failed" };
     }
 }
 

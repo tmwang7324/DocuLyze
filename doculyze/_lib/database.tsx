@@ -33,6 +33,14 @@ function documentsCol(uid: string) {
     return db.collection("users").doc(uid).collection("documents");
 }
 
+// Firestore ref for one document record. Exported for the SSE stream route
+// (issue #10) — the one consumer outside the DAL that needs the exact record
+// ref (to attach a snapshot listener), and the ref formula must not be
+// re-derived there (same one-place rationale as documentStoragePath below).
+export function documentRef(uid: string, docId: string) {
+    return documentsCol(uid).doc(docId);
+}
+
 
 // Create a doc-ref record under the *verified* user. The caller never supplies a
 // uid — it comes from the session cookie — so cross-user writes are impossible.

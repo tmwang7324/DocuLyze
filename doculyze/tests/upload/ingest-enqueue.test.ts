@@ -22,10 +22,16 @@ vi.mock("next/navigation", () => ({
 // --- Fake the producer at the module boundary -------------------------------
 // The broker is deliberately OUTSIDE this seam (guide: "faked at the module
 // boundary in tests") — no RabbitMQ needed; we assert the enqueue contract.
-vi.mock("@/_lib/ingest_broker", () => ({ publishIngestJob: vi.fn() }));
+// The mock must re-export the error classes: finalizeUpload's instanceof check
+// and the tests' rejects must reference the SAME class object (issue #10).
+vi.mock("@/_lib/ingest_broker", () => ({
+  publishIngestJob: vi.fn(),
+  IngestConfirmTimeoutError: class IngestConfirmTimeoutError extends Error {},
+  IngestDisabledError: class IngestDisabledError extends Error {},
+}));
 
 import { finalizeUpload } from "@/app/actions/document/upload_document";
-import { publishIngestJob } from "@/_lib/ingest_broker";
+import { publishIngestJob, IngestConfirmTimeoutError } from "@/_lib/ingest_broker";
 import { mintDocumentRecord } from "@/_lib/database";
 import { authAs, readDocumentRecord, resetEmulators, seedStorageObject } from "../helpers/harness";
 
@@ -41,8 +47,9 @@ beforeEach(async () => {
 
 describe("#4 ingest enqueue — finalizeUpload seam", () => {
   // Checkbox 1 (success half): a successful finalize publishes exactly one
-  // {uid, docId} envelope, after the record is `uploaded`.
-  it("successful finalize publishes exactly one (uid, docId) envelope", async () => {
+  // {uid, docId} envelope, after the record is `uploaded` — and reports the
+  // confirmed publish as `queued` (issue #10 enqueue-outcome contract).
+  it("successful finalize publishes exactly one (uid, docId) envelope and returns 'queued'", async () => {
     const { docId, storagePath } = await mintDocumentRecord({
       file_name: "notes.txt",
       title: "Notes",
@@ -52,8 +59,9 @@ describe("#4 ingest enqueue — finalizeUpload seam", () => {
     });
     await seedStorageObject(storagePath, "abc", "text/plain");
 
-    await finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes");
+    const result = await finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes");
 
+    expect(result).toEqual({ enqueue: "queued" });
     expect(publishMock).toHaveBeenCalledTimes(1);
     expect(publishMock).toHaveBeenCalledWith(UID, docId);
     expect((await readDocumentRecord(UID, docId))?.status).toBe("uploaded");
@@ -78,8 +86,9 @@ describe("#4 ingest enqueue — finalizeUpload seam", () => {
   });
 
   // Decision (grill 2026-07-18): swallow-and-log. A broker outage never fails
-  // the upload or regresses the `uploaded` write.
-  it("a publish failure does not fail the upload or regress the record", async () => {
+  // the upload or regresses the `uploaded` write. Issue #10 adds honesty: the
+  // definite failure is now REPORTED as `failed` instead of swallowed silently.
+  it("a definite publish failure returns 'failed' without failing the upload or regressing the record", async () => {
     publishMock.mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:5672"));
     const { docId, storagePath } = await mintDocumentRecord({
       file_name: "notes.txt",
@@ -90,7 +99,31 @@ describe("#4 ingest enqueue — finalizeUpload seam", () => {
     });
     await seedStorageObject(storagePath, "abc", "text/plain");
 
-    await expect(finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes")).resolves.toBeUndefined();
+    await expect(finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes")).resolves.toEqual({
+      enqueue: "failed",
+    });
+
+    // `failed` classification is about the ENQUEUE only — the record must stay
+    // `uploaded` (record `failed` means bad bytes and never regresses).
+    expect((await readDocumentRecord(UID, docId))?.status).toBe("uploaded");
+  });
+
+  // Issue #10: a confirm timeout means the envelope MAY have landed — the
+  // outcome is `unknown`, never `failed`, and the record is untouched.
+  it("a confirm timeout returns 'unknown' and leaves the record at uploaded", async () => {
+    publishMock.mockRejectedValue(new IngestConfirmTimeoutError("ingest publish confirm timed out"));
+    const { docId, storagePath } = await mintDocumentRecord({
+      file_name: "notes.txt",
+      title: "Notes",
+      contentType: "text/plain",
+      size: 3,
+      status: "pending",
+    });
+    await seedStorageObject(storagePath, "abc", "text/plain");
+
+    await expect(finalizeUpload(docId, "notes.txt", 3, "text/plain", "Notes")).resolves.toEqual({
+      enqueue: "unknown",
+    });
 
     expect((await readDocumentRecord(UID, docId))?.status).toBe("uploaded");
   });

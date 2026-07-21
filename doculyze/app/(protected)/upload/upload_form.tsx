@@ -6,6 +6,8 @@ import { getPresignedUrl, finalizeUpload } from "../../actions/document/upload_d
 import { MAX_FILE_SIZE } from "@/_lib/fileupload_schema";
 import { MIN_FILE_SIZE } from "@/_lib/fileupload_schema";
 import { toast } from 'sonner';
+import PipelineProgress from "./pipeline_progress";
+import type { FinalizeResult } from "@/_lib/ingest_contract";
 //import { uploadDocument } from "../../actions/document/upload_document";
 
 type fileObject = {
@@ -15,6 +17,13 @@ type fileObject = {
     uploading: boolean;
     url: string;
     title: string | null;
+};
+
+// Pipeline view state (issue #10): set when a PUT starts (docId known, finalize
+// pending), completed when finalize returns its enqueue classification.
+type PipelineState = {
+    docId: string;
+    result: FinalizeResult | null;
 };
 
 export default function UploadForm() {
@@ -35,13 +44,15 @@ export default function UploadForm() {
         url: "",
         title: null
     });
-    
+    const [pipeline, setPipeline] = useState<PipelineState | null>(null);
+
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
         const form = event.currentTarget as HTMLFormElement;
         const formData = new FormData(form);
         const title = formData.get('title') as string | null;
 
+        setPipeline(null); // a new upload tears down the previous progress view (and its stream)
         if(!fileObj.file) {
             toast.error("No file selected");
             setFileObj(prev => ({ ...prev, uploading: false }));
@@ -74,7 +85,8 @@ export default function UploadForm() {
         // }
         // return;
         try {
-        setFileObj(prev => ({ ...prev, uploading: true }));
+        setFileObj(prev => ({ ...prev, uploading: true, progress: 0 }));
+        setPipeline({ docId, result: null }); // step view opens at "Uploading"
         await new Promise<string>((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.upload.onprogress = (event) => {
@@ -86,20 +98,24 @@ export default function UploadForm() {
             xhr.onload = async () => {
                 if(xhr.status >= 200 && xhr.status < 300) {
                     // Bytes landed — now write the Firestore record (record-after-upload).
+                    // finalize returns the enqueue classification (issue #10); the
+                    // pipeline view branches on it (stream / retry-later / warn+watch).
                     try {
-                        await finalizeUpload(docId, file.name, file.size, contentType, title ?? "");
+                        const result = await finalizeUpload(docId, file.name, file.size, contentType, title ?? "");
+                        setPipeline({ docId, result });
                     } catch (err) {
                         setFileObj(prev => ({ ...prev, uploading: false }));
-                        
+                        setPipeline(null);
                         toast.error(`Upload saved but finalize failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
                         reject(err);
                         return;
                     }
-                    toast.success("Upload successful!");
+                    setFileObj(prev => ({ ...prev, uploading: false }));
                     form.reset();
                     resolve("success");
                 } else {
-                    setFileObj(prev => ({ ...prev, progress: 0, uploading: false })); 
+                    setFileObj(prev => ({ ...prev, progress: 0, uploading: false }));
+                    setPipeline(null);
                     toast.error(`Upload failed with status: ${xhr.status}`);
                     reject(new Error(`Upload failed with status: ${xhr.status}`));
                 }
@@ -116,7 +132,8 @@ export default function UploadForm() {
             xhr.send(file);
         })
         } catch (error) {
-            setFileObj(prev => ({ ...prev, progress: 0, uploading: false })); 
+            setFileObj(prev => ({ ...prev, progress: 0, uploading: false }));
+            setPipeline(null);
             toast.error(`Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
            //  return "success"
@@ -158,7 +175,13 @@ export default function UploadForm() {
                         </div>
                     );
                 })()}
-                <div>Upload Progress: {fileObj.progress.toFixed(2)}%</div>
+                {pipeline && (
+                    <PipelineProgress
+                        docId={pipeline.docId}
+                        progress={fileObj.progress}
+                        enqueue={pipeline.result?.enqueue ?? null}
+                    />
+                )}
             </div>
         </div>
     

@@ -8,9 +8,21 @@ import { createChannel } from "./rabbitmq";
 const QUEUE = process.env.INGEST_QUEUE ?? "doc.ingest";
 const CONFIRM_TIMEOUT_MS = 5000;
 
+// Issue #10 enqueue-outcome contract: a resolve means the broker durably
+// confirmed the envelope (`queued`). Every other outcome rejects, and the two
+// classes below are how finalizeUpload tells "definitely not enqueued" apart
+// from "may have landed" — the mapping stays this thin on purpose.
+export class IngestConfirmTimeoutError extends Error {}
+export class IngestDisabledError extends Error {}
+
 export async function publishIngestJob(uid: string, docId: string): Promise<void> {
   const ch = await createChannel();
-  if (!ch) return; // ingest disabled (RABBITMQ_URL unset) — doc rests at `uploaded`.
+  if (!ch) {
+    // Ingest disabled (RABBITMQ_URL unset) — doc rests at `uploaded`. A silent
+    // resolve here would misreport `queued` to the caller (issue #10), so this
+    // is now a definite (recoverable) failure instead of a no-op.
+    throw new IngestDisabledError("ingest disabled: RABBITMQ_URL unset");
+  }
 
   const body = Buffer.from(JSON.stringify({ uid, docId })); // exactly two fields
 
@@ -27,7 +39,7 @@ export async function publishIngestJob(uid: string, docId: string): Promise<void
   // (Backpressure/'drain' handling is elided: uploads are human-paced.)
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error("ingest publish confirm timed out")),
+      () => reject(new IngestConfirmTimeoutError("ingest publish confirm timed out")),
       CONFIRM_TIMEOUT_MS,
     );
     ch.sendToQueue(
