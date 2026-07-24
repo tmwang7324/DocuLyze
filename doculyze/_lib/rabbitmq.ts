@@ -40,6 +40,7 @@ async function connect(url: string): Promise<amqp.ConfirmChannel> {
     durable: true,
     arguments: { "x-dead-letter-exchange": DLX },
   });
+  
   console.log("RabbitMQ producer confirm channel ready");
   return ch;
 }

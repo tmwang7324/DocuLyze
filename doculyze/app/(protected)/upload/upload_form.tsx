@@ -49,6 +49,7 @@ export default function UploadForm() {
 //     useEffect(() => {
 // )
 
+    // files with no extension are not accepted
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
         const form = event.currentTarget as HTMLFormElement;

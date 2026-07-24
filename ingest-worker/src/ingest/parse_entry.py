@@ -31,13 +31,14 @@ def main() -> int:
     data = sys.stdin.buffer.read()
 
     # Reserve fd 1 for the payload BEFORE the parser (or its imports) can write
-    # anything: dup the real stdout aside, then point fd 1 at stderr so every
+    # anything: duplicate the real stdout aside, then point fd 1 at stderr so every
     # stray write — Python-level OR native C — lands on stderr, not the payload.
+    # This is so that Docling's native C stdout messages do not corrupt the Markdown payload.
     payload_fd = os.dup(1)
     os.dup2(2, 1)
 
-    try:
-        text = PARSERS[parser_name].parse(data)  # actual parsing; parser_name <- content type
+    try: # 
+        text = PARSERS[parser_name].parse(data)  # actual parsing; parser function <- parser_name <- content type
     except Exception as exc:  # noqa: BLE001 — any failure is a parse failure
         print(f"parse failed ({parser_name}): {exc}", file=sys.stderr)
         return 1

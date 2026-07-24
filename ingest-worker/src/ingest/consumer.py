@@ -60,8 +60,8 @@ def declare_topology(channel, ingest_queue: str, retry_queue: str) -> None:
         queue=retry_queue,
         durable=True,
         arguments={
-            "x-dead-letter-exchange": "",
-            "x-dead-letter-routing-key": ingest_queue,
+            "x-dead-letter-exchange": "", # "" routes expired retries back to doc.ingest via 
+            "x-dead-letter-routing-key": ingest_queue, # the default exchange's implicit queue-name binding 
             "x-message-ttl": retry_delay_ms(),
         },
     )
