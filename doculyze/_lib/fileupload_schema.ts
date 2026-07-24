@@ -16,20 +16,23 @@ import { z } from "zod";
 // contentType allowlist (the "gate" — what the server is willing to sign).
 export const ACCEPTED_TYPES: Record<string, string> = {
     "application/pdf": ".pdf",
-    "application/msword": ".doc",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "text/plain": ".txt",
     "application/json": ".json",
     "application/javascript": ".js",
     "application/typescript": ".ts",
+    "application/xml": ".xml",
+    "application/x-python": ".py",
     "text/markdown": ".md",
     "text/html": ".html",
     "text/css": ".css",
-    "application/xml": ".xml",
+    // NB: .xml/application/xml intentionally omitted — the worker has no
+    // structure-aware parser for it yet (Docling markup path is pending), so
+    // accepting it here would only produce late parse failures. Re-add when wired.
 };
 
 export const ACCEPTED_EXTENSIONS = [
-    ".pdf", ".doc", ".docx", ".txt", ".json", ".js", ".ts", ".md", ".html", ".css", ".xml",
+    ".pdf", ".docx", ".txt", ".json", ".js", ".ts", ".md", ".html", ".css", ".xml", ".py",
 ];
 
 // ext → canonical MIME (reverse of ACCEPTED_TYPES). Built once so the two can't drift.
@@ -39,8 +42,7 @@ const EXT_TO_TYPE: Record<string, string> = Object.fromEntries(
 
 // The ONE canonical content-type the whole upload chain uses (Policy B — see GRILL Q6):
 // the file EXTENSION is the authority; the browser's file.type is ignored. file.type is
-// "" for .md/.ts/.doc (which orphaned legit uploads), and it's attacker-controlled at the
-// getPresignedUrl RPC boundary anyway (the dropzone is not the trust boundary). The server
+// "" for .md/.ts (which orphaned legit uploads). The server
 // resolves this, signs it, returns it, the client echoes it into the PUT header, and GCS
 // stores it — one non-empty value across all sites. Returns null for an unknown extension.
 export function resolveContentType(fileName: string): string | null {

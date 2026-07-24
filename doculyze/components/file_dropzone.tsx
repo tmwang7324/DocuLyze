@@ -108,7 +108,7 @@ export default function FileDropzone({ onFileAccepted, onFileCleared, disabled }
                 <input
                     ref={inputRef}
                     type="file"
-                    accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={onInputChange}
                     disabled={disabled}
                     className="sr-only"
@@ -121,7 +121,7 @@ export default function FileDropzone({ onFileAccepted, onFileCleared, disabled }
                     <>
                         <p className="text-sm">Drag &amp; drop a file here, or click to browse</p>
                         <p className="text-xs text-gray-500">
-                            PDF, Word (.doc, .docx), Text (.txt), JSON (.json), JavaScript (.js), TypeScript (.ts), Markdown (.md), HTML (.html), CSS (.css), XML (.xml) up to {formatBytes(MAX_FILE_SIZE)}
+                            PDF, Word (.docx), Text (.txt), JSON (.json), JavaScript (.js), TypeScript (.ts), Markdown (.md), HTML (.html), CSS (.css) up to {formatBytes(MAX_FILE_SIZE)}
                         </p>
                     </>
                 )}

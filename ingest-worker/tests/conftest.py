@@ -41,3 +41,12 @@ def clean_emulators():
     import support
 
     support.reset_emulators()
+
+
+@pytest.fixture()
+def clean_firestore():
+    """Wipe Firestore docs only — for Firestore-only test modules (issue #12)
+    that shouldn't hard-depend on the Storage emulator being up."""
+    import support
+
+    support.reset_firestore()

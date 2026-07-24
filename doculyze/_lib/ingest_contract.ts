@@ -19,6 +19,8 @@ export type FinalizeResult = {
 // Document statuses that end the pipeline stream: the route handler closes
 // server-side and the client closes its EventSource on the same event. One
 // list here so the two ends can't drift.
+
+// final
 export const TERMINAL_DOC_STATUSES = ["ready", "failed"] as const;
 
 export function isTerminalDocStatus(status: string): boolean {

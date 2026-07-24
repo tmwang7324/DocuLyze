@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ingest.config import parse_timeout_s
+from ingest.parsers import PARSERS, parse_timeout_for
 
 
 class ParseError(Exception):
@@ -19,9 +19,9 @@ class ParseError(Exception):
 def _child_env() -> dict[str, str]:
     # The child must resolve `ingest` the same way the parent did, regardless of
     # how the parent was launched (pytest sys.path hack vs container PYTHONPATH).
-    src_dir = str(Path(__file__).resolve().parents[1])
-    env = dict(os.environ)
-    env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "")
+    src_dir = str(Path(__file__).resolve().parents[1]) # set absolute path to /ingest-worker/src. For Python to import ingest.parse_enty, PYTHONPATH must contain the directory that contains the ingest package, which is src.
+    env = dict(os.environ) # copy the current environment variables
+    env["PYTHONPATH"] = src_dir + os.pathsep + env.get("PYTHONPATH", "") # 
     return env
 
 
@@ -29,7 +29,8 @@ def run_parser_sandboxed(
     parser_name: str, object_bytes: bytes, timeout_s: float | None = None
 ) -> str:
     if timeout_s is None:
-        timeout_s = parse_timeout_s()
+        # Per-parser budget from the registry (ticket #14), read at call time.
+        timeout_s = parse_timeout_for(parser_name)
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "ingest.parse_entry", parser_name],
@@ -45,3 +46,7 @@ def run_parser_sandboxed(
             f"{parser_name} exited {proc.returncode}: {proc.stderr.decode('utf-8', 'replace')[:300]}"
         )
     return proc.stdout.decode("utf-8", errors="replace")
+
+
+if __name__ == "__main__":
+    print(_child_env())

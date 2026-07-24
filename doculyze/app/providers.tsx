@@ -10,6 +10,7 @@ type AuthUser = {
     email: string | null;
     uid: string | null;
     verified: boolean;
+    profile_pic: string | null;
 };
 
 type AuthContextType = {
@@ -22,7 +23,8 @@ type AuthContextType = {
 export const defaultAuthUser = {
     email: "",
     uid: "",
-    verified: false
+    verified: false,
+    profile_pic: null
 };
 
 const AuthContext = createContext<AuthContextType>({
@@ -57,7 +59,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 setUser({
                     email: userData.email || "",
                     uid: userData.uid || "",
-                    verified: true
+                    verified: true,
+                    profile_pic: userData.photoURL || null,
                 });
             }
             else {

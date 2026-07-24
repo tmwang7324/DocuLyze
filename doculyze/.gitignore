@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 .env.local
 
+app/(protected)/upload/_archive/*
+
+
 # local docs
 CLAUDE.md
 AGENTS.md

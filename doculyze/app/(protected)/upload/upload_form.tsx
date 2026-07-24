@@ -6,7 +6,7 @@ import { getPresignedUrl, finalizeUpload } from "../../actions/document/upload_d
 import { MAX_FILE_SIZE } from "@/_lib/fileupload_schema";
 import { MIN_FILE_SIZE } from "@/_lib/fileupload_schema";
 import { toast } from 'sonner';
-import PipelineProgress from "./pipeline_progress";
+import PipelineProgress from "../../../components/pipeline_progress";
 import type { FinalizeResult } from "@/_lib/ingest_contract";
 //import { uploadDocument } from "../../actions/document/upload_document";
 
@@ -45,6 +45,9 @@ export default function UploadForm() {
         title: null
     });
     const [pipeline, setPipeline] = useState<PipelineState | null>(null);
+
+//     useEffect(() => {
+// )
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
         event.preventDefault();
@@ -141,40 +144,48 @@ export default function UploadForm() {
     }
     return (
         <div> 
-            Upload Your Document
-            <form onSubmit={handleSubmit}>
-                <input type="text" name="title" placeholder="Enter title here" />
-                <FileDropzone onFileAccepted={(f) => setFileObj(prev => ({ ...prev, file: f, url: URL.createObjectURL(f)}))}
-                    onFileCleared={() => {
-                        setFileObj(prev => {
-                            if(prev.url) {
-                                URL.revokeObjectURL(prev.url);
-                            }
-                            return { ...prev, file: null, url: "" };
-                        })}
-                    }
-                />
-                <button type="submit" disabled={!fileObj.file}>Upload</button>
-            </form>
-            <div>
-                {fileObj.file && (() => {
-                    const t = fileObj.file.type;
-                    if (t === "application/pdf" || t.startsWith("text/") || t === "application/json") {
+            {!pipeline && 
+                <div>
+                Upload Your Document
+                <form onSubmit={handleSubmit}>
+                    <input type="text" name="title" placeholder="Enter title here" />
+                    <FileDropzone onFileAccepted={(f) => setFileObj(prev => ({ ...prev, file: f, url: URL.createObjectURL(f)}))}
+                        onFileCleared={() => {
+                            setFileObj(prev => {
+                                if(prev.url) {
+                                    URL.revokeObjectURL(prev.url);
+                                }
+                                return { ...prev, file: null, url: "" };
+                            })}
+                        }
+                    />
+                    <button type="submit" disabled={!fileObj.file}>Upload</button>
+                </form>
+                
+            
+                <div>
+                    {fileObj.file && (() => {
+                        const t = fileObj.file.type;
+                        if (t === "application/pdf" || t.startsWith("text/") || t === "application/json") {
+                            return (
+                                <iframe
+                                    src={fileObj.url}
+                                    title={fileObj.file.name}
+                                    className="h-96 w-full rounded-lg border"
+                                />
+                            );
+                        }
+                        // .doc/.docx and other non-previewable types — no browser renderer exists
                         return (
-                            <iframe
-                                src={fileObj.url}
-                                title={fileObj.file.name}
-                                className="h-96 w-full rounded-lg border"
-                            />
+                            <div className="rounded-lg border p-4 text-sm">
+                                📄 {fileObj.file.name} — no inline preview available
+                            </div>
                         );
-                    }
-                    // .doc/.docx and other non-previewable types — no browser renderer exists
-                    return (
-                        <div className="rounded-lg border p-4 text-sm">
-                            📄 {fileObj.file.name} — no inline preview available
-                        </div>
-                    );
-                })()}
+                    })()}
+                </div>
+                </div>
+            }
+            <div>
                 {pipeline && (
                     <PipelineProgress
                         docId={pipeline.docId}
@@ -182,7 +193,7 @@ export default function UploadForm() {
                         enqueue={pipeline.result?.enqueue ?? null}
                     />
                 )}
-            </div>
+           </div>
         </div>
     
         // <form onSubmit={handleSubmit}>
