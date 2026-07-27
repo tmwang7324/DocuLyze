@@ -2,7 +2,10 @@
 
 import { useRef, useState } from "react";
 import { z } from "zod";
-import { MAX_FILE_SIZE, validateFile, formatBytes } from "@/_lib/fileupload_schema";
+import { validateFile } from "@/_lib/fileupload_schema";
+import { PICKER_ACCEPT, SIZE_HINT } from "@/_lib/upload_picker";
+import { FORMAT_FAMILIES } from "@/_lib/format_families";
+import { IconUpload } from "@/components/brand_icons";
 
 // ---------------------------------------------------------------------------
 // Client-side gating ONLY — friendly, early rejection. It is NOT security.
@@ -87,57 +90,97 @@ export default function FileDropzone({ onFileAccepted, onFileCleared, disabled }
     }
 
     return (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
             <label
                 onDrop={onDrop}
                 onDragEnter={onDragEnter}
                 onDragLeave={onDragLeave}
                 onDragOver={onDragOver}
-                className={`flex flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors focus-within:ring-2 focus-within:ring-blue-500 ${
+                className={`flex flex-col items-center justify-center gap-4 border-2 border-dashed px-6 py-14 text-center transition-colors focus-within:border-orange-primary focus-within:ring-2 focus-within:ring-orange-pale ${
                     disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
                 } ${
                     dragActive
-                        ? "border-blue-500 bg-blue-50"
+                        ? "border-orange-primary bg-orange-pale"
                         : error
-                          ? "border-red-400"
-                          : "border-gray-300 hover:border-gray-400"
+                          ? "border-error bg-white"
+                          : "border-hairline bg-white hover:border-orange-primary hover:bg-off-white"
                 }`}
             >
                 {/* sr-only (not hidden) so the input stays keyboard-focusable; the
-                    native filename label never renders because it isn't visible. */}
+                    native filename label never renders because it isn't visible.
+
+                    The accept filter used to be a hard-coded ".pdf,.docx" plus two
+                    MIME types, so browsing greyed out nine formats the server
+                    accepts and the chips below advertise. It is derived now — see
+                    _lib/upload_picker.ts and tests/upload/picker.test.ts. (#25) */}
                 <input
                     ref={inputRef}
                     type="file"
-                    accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    accept={PICKER_ACCEPT}
                     onChange={onInputChange}
                     disabled={disabled}
                     className="sr-only"
                 />
+
+                <span className={dragActive ? "text-orange-primary" : "text-muted"} aria-hidden="true">
+                    <IconUpload />
+                </span>
+
                 {dragActive ? (
-                    <p className="text-sm text-blue-600">Drop the file here…</p>
+                    <p className="font-display text-2xl font-bold uppercase text-orange-primary">
+                        Drop it here
+                    </p>
                 ) : fileName ? (
-                    <p className="text-sm font-medium">{fileName}</p>
-                ) : (
-                    <>
-                        <p className="text-sm">Drag &amp; drop a file here, or click to browse</p>
-                        <p className="text-xs text-gray-500">
-                            PDF, Word (.docx), Text (.txt), JSON (.json), JavaScript (.js), TypeScript (.ts), Markdown (.md), HTML (.html), CSS (.css) up to {formatBytes(MAX_FILE_SIZE)}
+                    <div className="max-w-full">
+                        <p className="font-display text-2xl font-bold uppercase text-dark truncate">
+                            {fileName}
                         </p>
-                    </>
+                        <p className="font-mono-label text-[10px] tracking-wider uppercase text-muted mt-2">
+                            Ready to upload
+                        </p>
+                    </div>
+                ) : (
+                    <div>
+                        <p className="font-display text-2xl font-bold uppercase text-dark leading-none">
+                            Drop a document
+                        </p>
+                        <p className="text-muted text-sm mt-2">or click anywhere to browse</p>
+                    </div>
                 )}
+
+                {/* The six format families, directly above the picker they describe.
+                    Same source as the landing page's grid (FORMAT_FAMILIES), which
+                    is pinned to the upload allowlist — the chips can't advertise a
+                    format the server would reject. */}
+                <div className="flex flex-wrap items-center justify-center gap-1.5">
+                    {FORMAT_FAMILIES.map((family) => (
+                        <span
+                            key={family.key}
+                            className="font-mono-label text-[10px] tracking-wider uppercase border border-hairline text-muted px-2 py-1"
+                        >
+                            {family.label}
+                        </span>
+                    ))}
+                </div>
+
+                <p className="font-mono-label text-[10px] tracking-wider uppercase text-placeholder">
+                    {SIZE_HINT}
+                </p>
             </label>
 
             {fileName && (
                 <button
                     type="button"
                     onClick={clear}
-                    className="self-start text-xs text-red-500 hover:text-red-700"
+                    className="self-start font-mono-label text-[10px] tracking-wider uppercase text-muted hover:text-error transition-colors"
                 >
-                    Remove
+                    Remove file
                 </button>
             )}
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && (
+                <p className="border-l-2 border-error bg-white px-3 py-2 text-sm text-error">{error}</p>
+            )}
         </div>
     );
 }

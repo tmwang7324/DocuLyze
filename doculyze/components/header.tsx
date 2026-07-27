@@ -7,20 +7,24 @@
 // reflect backend session expiry. Revisit once the cookie-driven revalidate()
 // is wired into the login/register handlers. See GRILL-ME-auth-state notes.
 
-import { useAuth } from '@/app/providers';
+import { defaultAuthUser, useAuth } from '@/app/providers';
 import { auth } from '@/_lib/firebase';
 import { useState, useEffect } from 'react';
 import { revokeSession } from '@/app/actions/auth/session';
+import { useRouter } from 'next/navigation';
 
 const Header = () => {
-    const { user, loading } = useAuth();
+    const { user, loading, setUser } = useAuth();
     const [signingOut, setSigningOut] = useState(false);
-
+    const router = useRouter();
     const handleSignOut = async (): Promise<void> => {
         setSigningOut(true);
         try {
             await auth.signOut();
-            await revokeSession(); // redirects to /login on success
+            await revokeSession();
+            setUser(defaultAuthUser);
+            console.log("signed user out successfully") // redirects to /login on success
+            router.push("/login");
         } catch (error) {
             console.error("Error signing out:", error);
             setSigningOut(false); // only reached if sign-out failed before redirect
@@ -58,7 +62,7 @@ const Header = () => {
     // });
     // return subscribe;
 
-    }, [user]);
+    }, [user, loading]);
 
     return (
         <div>

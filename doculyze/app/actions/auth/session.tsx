@@ -47,6 +47,11 @@ export async function createRefresh(password: string, idToken: string): Promise<
     await createUserProfile({ email: decodedToken.email as string, password: password, sessionCookie: refreshCookie });
     //createAccess(refreshCookie);
     revalidatePath("/dashboard");
+    // Issue #21: the nav's auth state is resolved in the (public) group layout,
+    // whose RSC payload the client router caches. Navigating to /dashboard after
+    // login renders the (protected) layout fresh, so the nav is right there — but
+    // without this, a later visit to / would serve the cached signed-out nav.
+    revalidatePath("/", "layout");
     redirect("/dashboard");
     // return refreshCookie; // Return the newly created session cookie
 }
@@ -64,7 +69,11 @@ export async function revokeSession() {
         cookieStore.delete("access");
     } catch (error) {
         console.log(error);
-    } 
+    }
+    // Issue #21: same reason as createRefresh — drops the cached (public) layout
+    // so / doesn't keep serving the signed-in nav after sign-out. /login itself
+    // needs no invalidation: its group hardcodes the signed-out nav.
+    revalidatePath("/", "layout");
     redirect("/login");
 }
 
