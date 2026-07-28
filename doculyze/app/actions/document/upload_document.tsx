@@ -1,6 +1,6 @@
 "use server";
 import { storage } from '@/_lib/admin';
-import { finalizeDocumentRecord, documentStoragePath, mintDocumentRecord } from '@/_lib/database';
+import { finalizeDocumentRecord, documentStoragePath, mintDocumentRecord, DuplicateDocumentError, SIGNED_URL_TTL_MS } from '@/_lib/database';
 import { getCurrentUid } from '@/_lib/data';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
@@ -15,10 +15,21 @@ type DocFormState = {
     fileType: string | null;
 }
 
+// `error` is set (with the url/docId/contentType blank) when the upload was
+// REFUSED for a reason the user can act on — today: a duplicate document. It
+// exists because a thrown server-action error reaches the browser as an opaque
+// digest in production, so the reason has to travel in the return value.
+export type PresignResult = {
+    url: string;
+    docId: string;
+    contentType: string;
+    error?: string;
+};
+
 export async function getPresignedUrl(
     fileName: string,
     title: string,
-    size: number): Promise<{ url: string; docId: string; contentType: string }> {
+    size: number): Promise<PresignResult> {
     // Validate the metadata claim with zod before doing anything.
     const parsed = validateUploadClaim({ file_name: fileName, title, size });
     if (parsed !== undefined) {
@@ -49,7 +60,7 @@ export async function getPresignedUrl(
         const [url] = await file.getSignedUrl({
             action: 'write',
             version: 'v4',
-            expires: Date.now() + 15 * 60 * 1000, // URL expires in 15 minutes
+            expires: Date.now() + SIGNED_URL_TTL_MS, // 15 minutes
             contentType: contentType,
             extensionHeaders: {
                 'x-goog-content-length-range': `${MIN_FILE_SIZE},${MAX_FILE_SIZE}` // 1 byte to 5 MB
@@ -59,6 +70,12 @@ export async function getPresignedUrl(
         // (its own file.type is untrusted — Policy B). The signed URL pins this same type.
         return { url, docId, contentType };
     } catch (error) {
+        // A duplicate is a refusal, not a fault: nothing was minted, nothing was
+        // signed, and the user needs to be told WHY rather than seeing the
+        // generic "couldn't get a URL". Not logged as an error for the same reason.
+        if (error instanceof DuplicateDocumentError) {
+            return { url: "", docId: "", contentType: "", error: error.message };
+        }
         console.error("Error generating presigned URL:", error);
         return { url: "", docId: "", contentType: "" };
     }

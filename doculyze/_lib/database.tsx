@@ -2,6 +2,7 @@ import "server-only";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db, storage } from "@/_lib/admin";
 import { requireUid } from "@/_lib/data";
+import { formatBytes } from "@/_lib/fileupload_schema";
 import { createHash } from 'crypto';
 
 
@@ -69,6 +70,92 @@ export function documentStoragePath(uid: string, docId: string): string {
 
 
 
+// How long a presigned write URL stays valid. Lives here, next to the pending
+// lifetimes it defines, because two rules are derived from it: the signer's
+// `expires` (upload_document.tsx) and the duplicate gate's "is this pending
+// upload still live?" test below. A drift between those would either block
+// retries or let a double-submit through.
+export const SIGNED_URL_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+// --- Duplicate gate ---------------------------------------------------------
+// Identity is (file_name, size), with the name compared case-INSENSITIVELY:
+// same name AND same byte count means the same document, per product rule.
+// "Report.pdf" and "report.pdf" at the same size are one document — the case a
+// file picker hands over depends on the OS and on which copy of the file the
+// user reached for, so it can't be part of identity. No content hash — the bytes
+// never pass through the server (they go straight to Storage), so hashing would
+// mean downloading every candidate.
+//
+// Which existing records block a new upload of that pair:
+//   uploaded / processing / ready — the document is already in the archive.
+//                                   This is the duplicate we exist to prevent.
+//   pending, minted < SIGNED_URL_TTL_MS ago — an upload of the same file is in
+//                                   flight (double submit, two tabs). Blocking
+//                                   is what stops the race producing two copies.
+//   pending, older than that      — its signed URL has expired, so no PUT can
+//                                   still land against it: the record is
+//                                   abandoned, not a claim, and must NOT block
+//                                   the user's retry. (The reap clears it.)
+//   failed                        — a rejected upload has to stay retryable.
+export class DuplicateDocumentError extends Error {
+    constructor(
+        message: string,
+        readonly existingDocId: string,
+        readonly existingStatus: DocStatus,
+    ) {
+        super(message);
+        this.name = "DuplicateDocumentError";
+    }
+}
+
+const SETTLED_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["uploaded", "processing", "ready"]);
+
+// Does this existing record make (file_name, size) unavailable right now?
+function blocksDuplicate(status: unknown, uploadedAt: unknown): boolean {
+    if (typeof status !== "string") return false;
+    if (SETTLED_BLOCKING_STATUSES.has(status)) return true;
+    if (status !== "pending") return false;
+    // A serverTimestamp is briefly absent between the write and the server
+    // resolving it — that record was minted moments ago, so treat it as live.
+    if (!(uploadedAt instanceof Timestamp)) return true;
+    return Date.now() - uploadedAt.toMillis() < SIGNED_URL_TTL_MS;
+}
+
+// Do these two filenames name the same document? Case-insensitive, and both
+// sides go through the same fold, so the comparison is symmetric.
+function sameDocumentName(a: unknown, b: string): boolean {
+    return typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+}
+
+// `fileName` is the EXISTING record's name, not the one just attempted: when the
+// two differ only in case, the stored spelling is the one the user will find in
+// their archive, so quoting theirs would send them looking for a name that isn't
+// listed.
+function duplicateMessage(fileName: string, size: number, status: DocStatus): string {
+    if (status === "pending") {
+        return `"${fileName}" is already being uploaded — wait for that upload to finish before sending it again.`;
+    }
+    return `"${fileName}" (${formatBytes(size)}) is already in your documents — duplicate uploads aren't allowed.`;
+}
+
+// Mint the pending record for a new upload, rejecting duplicates.
+//
+// The duplicate query and the write share ONE transaction on purpose: the
+// query's read lock is what serializes two simultaneous presigns of the same
+// file. A check made before the transaction would let both callers pass it and
+// both mint, which is exactly the double-submit case the gate is for.
+//
+// The query carries only `size`; name and status are matched in memory. Size is
+// the selective half (an exact byte count), and neither of the other two can be
+// a filter: Firestore equality is case-SENSITIVE, and blocksDuplicate is
+// time-dependent. Keeping the name out of the query is also why this needed no
+// normalized `file_name_lower` column — which finalizeDocumentRecord would have
+// had to maintain in lockstep with file_name, and which every record written
+// before this gate existed would have needed backfilled. One equality filter
+// rides the default single-field index, so firestore.indexes.json is untouched.
+//
+// Throws DuplicateDocumentError — an expected rejection carrying a
+// user-presentable reason, not a fault.
 export async function mintDocumentRecord(input: {
     file_name: string;
     title: string;
@@ -79,16 +166,32 @@ export async function mintDocumentRecord(input: {
     const uid = await requireUid();
     const docId = documentsCol(uid).doc().id;
     const storagePath = documentStoragePath(uid, docId);
-    await documentsCol(uid).doc(docId).set({
-        docId: docId,
-        file_name: input.file_name,
-        title: input.title,
-        storagePath: storagePath,
-        contentType: input.contentType,
-        size: input.size,
-        version: 1,
-        status: input.status,
-        uploadedAt: FieldValue.serverTimestamp(),
+    const sameSize = documentsCol(uid).where("size", "==", input.size);
+    await db.runTransaction(async (tx) => {
+        const existing = await tx.get(sameSize);
+        for (const doc of existing.docs) {
+            const fileName = doc.get("file_name") as unknown;
+            if (!sameDocumentName(fileName, input.file_name)) continue;
+            const status = doc.get("status") as DocStatus;
+            if (blocksDuplicate(status, doc.get("uploadedAt"))) {
+                throw new DuplicateDocumentError(
+                    duplicateMessage(fileName as string, input.size, status),
+                    doc.id,
+                    status,
+                );
+            }
+        }
+        tx.set(documentsCol(uid).doc(docId), {
+            docId: docId,
+            file_name: input.file_name,
+            title: input.title,
+            storagePath: storagePath,
+            contentType: input.contentType,
+            size: input.size,
+            version: 1,
+            status: input.status,
+            uploadedAt: FieldValue.serverTimestamp(),
+        });
     });
     return { docId, storagePath: storagePath };
 }
@@ -113,7 +216,7 @@ export async function finalizeDocumentRecord(input: {
 }
 
 // A pending record is "stale" once it's older than this. Must stay comfortably
-// above the 15-minute signed-URL expiry (upload_document.tsx): past expiry no
+// above the 15-minute signed-URL expiry (SIGNED_URL_TTL_MS): past expiry no
 // new PUT can start, so a pending record this old can only be an abandoned
 // upload — never one still in flight (#3 checkbox 4).
 export const STALE_PENDING_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour

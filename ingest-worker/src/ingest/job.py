@@ -10,6 +10,7 @@ MAIN INGESTING FUNCTION (entry point for processing a single document)
 """
 
 import logging
+from pathlib import Path
 
 
 from ingest.config import firestore_client, storage_bucket
@@ -20,6 +21,7 @@ from ingest.precheck import precheck
 from ingest.sandbox import ParseError, run_parser_sandboxed
 
 log = logging.getLogger("ingest")
+current_dir = Path(__file__).resolve().parent
 
 
 def run_ingest_job(envelope: dict) -> str:
@@ -60,6 +62,10 @@ def run_ingest_job(envelope: dict) -> str:
                 # Even OCR found nothing embeddable — that is a document-level
                 # failure, not a false success ending at `processing`.
                 raise ParseError("OCR fallback recovered no embeddable text")
+
+        with open("/tmp/test_ocr.md", "w", encoding="utf-8") as f:
+                f.write(text)
+        log.info("Converted Markdown file at /tmp/test_ocr.md")  
     except ParseError as exc:
         log.warning("parse failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)  # object retained
