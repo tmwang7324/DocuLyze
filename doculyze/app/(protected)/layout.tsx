@@ -1,7 +1,6 @@
 import { verifyUser } from "../actions/auth/verify_user";
 import { redirect } from "next/navigation";
 import type { Metadata } from "next";
-import NavShell from "@/components/nav_shell";
 
 // The Geist loaders that used to sit here were dead: their variables were never
 // applied to any element (this layout renders no <html>), but calling a next/font
@@ -19,9 +18,11 @@ export default async function ProtectedLayout({children}: Readonly<{children: Re
     if (!userVerified) {
         redirect("/login");
     }
-    // "signed-in" is a proof here, not a guess: the redirect above means this
-    // line is unreachable unless the session cookie verified. (issue #21)
-    return (
-        <NavShell variant="signed-in">{children}</NavShell>
-    );
+    // This layout no longer supplies the nav. It used to pass "signed-in" as a
+    // proof rather than a guess — the redirect above means this line is
+    // unreachable unless the cookie verified — but the bar now renders from the
+    // root layout and its islands re-derive that for themselves. They reach the
+    // same answer here by reading the same cookie; the verification below is
+    // still what actually gates the route.
+    return <>{children}</>;
 }

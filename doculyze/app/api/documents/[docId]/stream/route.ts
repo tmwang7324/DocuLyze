@@ -19,6 +19,19 @@ import { isTerminalDocStatus } from "@/_lib/ingest_contract";
 
 export const runtime = "nodejs"; // Admin SDK requires Node, not edge
 export const dynamic = "force-dynamic";
+// How long one request is allowed to run before the host cuts it off.
+//
+// Most pages answer in well under a second, so this limit never comes up. This
+// route is the exception: it holds the connection open and keeps sending updates
+// as the document moves through the pipeline. Hosts cut that off at their own
+// default — often 60s — which would silence the progress view mid-upload for no
+// reason the user can see. Setting it to five minutes means the stream ends when
+// HARD_DEADLINE_MS below says so, not when the host loses patience; the two are
+// deliberately the same number.
+//
+// 300 is the ceiling on Vercel's free tier. If the plan rejects it, the build
+// fails and this has to come down to 60.
+export const maxDuration = 300;
 
 const KEEPALIVE_MS = 15_000; // SSE comments defeat proxy buffering
 const HARD_DEADLINE_MS = 5 * 60_000; // generous bound on abandoned streams

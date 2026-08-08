@@ -5,7 +5,6 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import type { ServiceAccount } from "firebase-admin";
-import serviceAccount from "@/serviceAccount.json";
 
 function getRequiredEnv(name: string): string {
     const value = process.env[name];
@@ -16,14 +15,19 @@ function getRequiredEnv(name: string): string {
 
     return value;
 }
-// i'll migrate this tomorrow to use environment variables instead of the serviceAccountKey.json file
-// const serviceAccountFromEnv: ServiceAccount = {
-//     projectId: getRequiredEnv("FIREBASE_ADMIN_PROJECT_ID"),
-//     privateKey: getRequiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n"),
-//     clientEmail: getRequiredEnv("FIREBASE_ADMIN_CLIENT_EMAIL"),
-// };
+// Credentials come from env vars, not serviceAccount.json. The JSON file is
+// gitignored, so it does not exist in a Vercel build — a static import of it
+// fails the build outright. These three fields are the only ones cert() reads.
+// privateKey: .env stores the PEM on one line with literal "\n" escapes, so they
+// are unescaped here. Pasting a real multi-line key into Vercel's dashboard also
+// works — the replace is then a no-op.
+const serviceAccountFromEnv: ServiceAccount = {
+    projectId: getRequiredEnv("FIREBASE_ADMIN_PROJECT_ID"),
+    privateKey: getRequiredEnv("FIREBASE_ADMIN_PRIVATE_KEY").replace(/\\n/g, "\n"),
+    clientEmail: getRequiredEnv("FIREBASE_ADMIN_CLIENT_EMAIL"),
+};
 let config = {
-        credential: cert(serviceAccount as ServiceAccount),
+        credential: cert(serviceAccountFromEnv),
         // Default bucket for getStorage().bucket(). Set FIREBASE_STORAGE_BUCKET
         // in .env.local once the bucket exists (usually <projectId>.firebasestorage.app
         // or <projectId>.appspot.com). Until then, storage uploads will throw.

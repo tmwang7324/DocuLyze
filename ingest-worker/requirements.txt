@@ -2,7 +2,11 @@ pika==1.3.2
 firebase-admin==6.6.0
 pymupdf==1.28.0
 pymupdf4llm==1.28.0
+<<<<<<< HEAD
 python-docx>=1.2.0,<2.0.0
+=======
+python-docx==1.1.2
+>>>>>>> 8b824cd (The parsing pipeline in the ingest worker now performs pdf, docx, code, xml, html into Markdown conversion using a best-of-breed stack with pymupdf, default decode, and docling. Pymupdf works decently well with complex financial pdfs (tested on Google's 2026 annual report) and Docling works well with docx, xml, and html. For Chrome/Edge print from PDF and other miscellaneous scanned documents, Docling OCR is used.)
 # Best-of-breed parse stage (issue #13): docx/html/xml + PDF-OCR fallback. Models
 # are baked into the image at build time (see Dockerfile) so conversions run offline.
 docling==2.114.0

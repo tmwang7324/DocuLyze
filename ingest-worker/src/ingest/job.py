@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 
 
+
 from ingest.config import firestore_client, storage_bucket
 from ingest.firestore_status import Claim, claim_for_processing, mark_failed
 from ingest.parsers import needs_ocr_fallback, parser_for
@@ -62,10 +63,13 @@ def run_ingest_job(envelope: dict) -> str:
                 # Even OCR found nothing embeddable — that is a document-level
                 # failure, not a false success ending at `processing`.
                 raise ParseError("OCR fallback recovered no embeddable text")
+<<<<<<< HEAD
 
         with open("/tmp/test_ocr.md", "w", encoding="utf-8") as f:
                 f.write(text)
         log.info("Converted Markdown file at /tmp/test_ocr.md")  
+=======
+>>>>>>> 8b824cd (The parsing pipeline in the ingest worker now performs pdf, docx, code, xml, html into Markdown conversion using a best-of-breed stack with pymupdf, default decode, and docling. Pymupdf works decently well with complex financial pdfs (tested on Google's 2026 annual report) and Docling works well with docx, xml, and html. For Chrome/Edge print from PDF and other miscellaneous scanned documents, Docling OCR is used.)
     except ParseError as exc:
         log.warning("parse failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)  # object retained

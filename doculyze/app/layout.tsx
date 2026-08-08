@@ -42,11 +42,17 @@ export const metadata: Metadata = {
 
 
 
-// Deliberately synchronous and cookie-free. This layout is the shared segment
-// above EVERY route, so a single cookies() call here opts the entire app out of
-// static rendering — that is what kept /login and /register dynamic. The nav and
-// its auth state live in the route-group layouts instead; see
-// components/nav_shell.tsx for why each group supplies its own value.
+// Still synchronous and cookie-free itself, which is what lets the nav live here
+// at all. This layout is the shared segment above EVERY route, so a cookies()
+// call *in this function* would opt the whole app out of static rendering. The
+// read happens one level down instead, inside the navbar islands, so the shell
+// this renders is plain markup.
+//
+// Being honest about what that buys and what it doesn't: the islands are awaited
+// with no Suspense boundary between them and the document, so every route still
+// renders dynamically — the win is that the nav is resolved server-side and
+// correct in the first byte, not that anything prerenders. See
+// app/navbar/header.tsx for the trade and the way back.
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -61,7 +67,9 @@ export default function RootLayout({
       
       <body className="min-h-full flex flex-col">
         <Header></Header>
-        {children}
+        {/* The nav is fixed at h-16; everything below it clears that. This moved
+            up from NavShell, which used to supply the clearance per route group. */}
+        <div className="flex-1 pt-16">{children}</div>
         <Toaster
           richColors
           position="top-right"
