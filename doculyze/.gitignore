@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 .env.local
+# The opt-out: a committed template with no real values. Must live here — a
+# negation in the root .gitignore cannot override a positive rule in this file.
+!.env.example
 
 app/(protected)/upload/_archive/*
 

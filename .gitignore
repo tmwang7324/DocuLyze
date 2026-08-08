@@ -4,9 +4,29 @@ serviceAccountKey.json
 serviceAccount.json
 **/serviceAccount.json
 
+# Environment files — never commit, anywhere in the tree.
+# Deliberately independent of the backend/ rule below: if that line is ever
+# relaxed to track the Express source, secrets must stay ignored regardless.
+# .env.example is the opt-out — a committed template with no real values.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Installed dependencies — any depth
+node_modules/
+**/node_modules/
+
 # Firebase emulator debug logs
 *-debug.log
 **/*-debug.log
+
+backend/
+.claude/
+agents/
+
 
 # code-explainer HTML output (build artifacts, not source)
 code-explanations/
