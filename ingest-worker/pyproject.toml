@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doculyze-ingest"
+version = "0.1.0"
+description = "DocuLyze ingest worker: RabbitMQ consumer + sandboxed document parsers"
+requires-python = ">=3.11"
+
+# Deliberately empty. requirements.txt stays the single source of truth for the
+# runtime pins (the Dockerfile installs from it, and the pins carry comments
+# explaining each one). Duplicating them here would let the two lists drift, and
+# `pip install -e .` is only ever meant to put `ingest` on sys.path — not to
+# resolve or upgrade dependencies. Install deps with:
+#     pip install -r requirements.txt
+dependencies = []
+
+# src layout: the import root is src/, so `import ingest` resolves to
+# src/ingest/. This replaces the old PYTHONPATH=src dance for local runs; the
+# container still sets ENV PYTHONPATH=/app/src (it copies src/ without
+# installing the project, so it never needs this file).
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ingest*"]

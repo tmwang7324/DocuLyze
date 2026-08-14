@@ -74,6 +74,33 @@ def docling_artifacts_path() -> str | None:
     return os.environ.get("DOCLING_ARTIFACTS_PATH") or None
 
 
+def chunk_output_dir() -> str | None:
+    return os.environ.get("CHUNK_OUTPUT_DIR") or None
+
+
+def embedding_model() -> str:
+    # The embedding pin (issue #29): recorded alongside every stored chunk.
+    # Changing it is an explicit full re-embed migration — mixing vector
+    # spaces/dimensions in one collection silently corrupts retrieval.
+    return os.environ.get("EMBEDDING_MODEL", "voyage-3.5-lite")
+
+
+def chroma_host() -> str:
+    # In compose this is the internal service name; the default suits a local
+    # `chroma run` outside the network.
+    return os.environ.get("CHROMA_HOST", "127.0.0.1")
+
+
+def chroma_port() -> int:
+    return int(os.environ.get("CHROMA_PORT", "8000"))
+
+
+def voyage_api_key() -> str | None:
+    # Same var the voyageai SDK resolves itself; read it here so the key stays
+    # a config concern and never gets hardcoded at a call site.
+    return os.environ.get("VOYAGE_API_KEY")
+
+
 def lease_ttl_s() -> int:
     # Processing-lease TTL (issue #12): must exceed worst-case job runtime —
     # since #18 that is a fast pdf pass (PARSE_TIMEOUT_S, 20s) followed by the
@@ -135,6 +162,10 @@ if __name__ == "__main__":
     print(f"OCR_MAX_PAGES         = {ocr_max_pages()}")
     print(f"PDF_OCR_MIN_CHARS     = {pdf_ocr_min_chars()}")
     print(f"DOCLING_ARTIFACTS     = {docling_artifacts_path() or '(unset — Docling cache)'}")
+    print(f"EMBEDDING_MODEL       = {embedding_model()}")
+    print(f"CHROMA_HOST           = {chroma_host()}")
+    print(f"CHROMA_PORT           = {chroma_port()}")
+    print(f"VOYAGE_API_KEY        = {'set' if voyage_api_key() else '(unset)'}")
     print(f"INGEST_LEASE_TTL_S    = {lease_ttl_s()}")
     print(f"FIRESTORE_EMULATOR    = {os.environ.get('FIRESTORE_EMULATOR_HOST') or 'REAL'}")
     print(f"STORAGE_EMULATOR      = {os.environ.get('STORAGE_EMULATOR_HOST') or 'REAL'}")

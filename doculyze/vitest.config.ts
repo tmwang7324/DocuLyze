@@ -1,43 +1,38 @@
 import { defineConfig } from "vitest/config";
+import { loadEnv } from "vite";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
+// Load .env so FIREBASE_ADMIN_* vars reach admin.tsx in test workers.
+// Without this, any test that imports admin.tsx (via upload_document, etc.)
+// crashes at module scope and vitest can only report a file-level failure.
+const fileEnv = loadEnv("test", root, "");
+
 export default defineConfig({
   resolve: {
     alias: [
-      // `server-only` throws if imported outside a React Server Component build.
-      // The DAL / admin modules import it as a guard; stub it out under test.
       { find: /^server-only$/, replacement: path.resolve(root, "tests/stubs/empty.ts") },
-      // Mirror tsconfig's "@/*" -> "./*" so @/_lib/... and @/serviceAccount.json resolve.
-      // Anchored to "@/" so it can't swallow scoped packages like @vitejs/*.
       { find: /^@\//, replacement: `${root}/` },
     ],
   },
-  
+
   test: {
     environment: "node",
     globals: true,
-    // All test files share ONE emulator instance, and each file's beforeEach
-    // wipes it (resetEmulators). Parallel files would wipe each other's data
-    // mid-test — run files sequentially.
     fileParallelism: false,
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup/emulator-env.ts"],
-    // These point every Firebase call at the local emulators. As long as the
-    // *_EMULATOR_HOST vars are set, the Admin SDK never reaches a real project —
-    // even though it initializes with real service-account credentials. This is
-    // the safety boundary: emulator host set == no production writes.
     env: {
+      // Base: .env values (provides FIREBASE_ADMIN_* for admin.tsx init)
+      ...fileEnv,
+      // Emulator overrides take priority — the safety boundary that stops
+      // the Admin SDK from reaching a real project.
       FIRESTORE_EMULATOR_HOST: "127.0.0.1:8085",
       STORAGE_EMULATOR_HOST: "http://127.0.0.1:9199",
       FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199",
       FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099",
-      // Must match the projectId the Admin SDK derives from serviceAccount.json,
-      // so the emulator UI (launched with --project doculyze) shows the data the
-      // tests write. A mismatch here means writes land in a project the UI isn't
-      // displaying and the Firestore tab looks empty.
       FIREBASE_STORAGE_BUCKET: "doculyze.appspot.com",
       GCLOUD_PROJECT: "doculyze",
     },

@@ -15,7 +15,7 @@ import pytest
 import support
 
 from ingest.config import lease_ttl_s
-from ingest.firestore_status import Claim, claim_for_processing, mark_failed
+from ingest.firestore_status import Claim, claim_for_processing, mark_failed, mark_ready
 
 UID = "user-a"
 DOC = "doc-1"
@@ -101,6 +101,14 @@ def test_mark_failed_flips_processing_to_failed(db):
     mark_failed(db, UID, DOC)
 
     assert support.read_status(UID, DOC) == "failed"
+
+
+def test_mark_ready_flips_processing_to_ready(db):
+    seed("processing")
+
+    mark_ready(db, UID, DOC)
+
+    assert support.read_status(UID, DOC) == "ready"
 
 
 def _doc_ref(db):

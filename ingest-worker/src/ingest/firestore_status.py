@@ -65,3 +65,8 @@ def claim_for_processing(db, uid: str, doc_id: str) -> Claim:
 def mark_failed(db, uid: str, doc_id: str) -> None:
     """processing -> failed, flag-only. Never touches Storage (bytes retained)."""
     _doc_ref(db, uid, doc_id).update({"status": "failed"})
+
+
+def mark_ready(db, uid: str, doc_id: str) -> None:
+    """processing -> ready. Called only after chunks are persisted and verified."""
+    _doc_ref(db, uid, doc_id).update({"status": "ready"})

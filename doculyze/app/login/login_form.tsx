@@ -33,14 +33,14 @@ const LoginForm = () => {
         const idToken = await user.getIdToken();
         const cookie = await createRefresh(password, idToken);
         
-        setUser({
-                email: user.email || "",
-                uid: user.uid || "",
-                verified: true,
-                profile_pic: user.photoURL || null
-            });
+        // setUser({
+        //         email: user.email || "",
+        //         uid: user.uid || "",
+        //         verified: true,
+        //         profile_pic: user.photoURL || null
+        //     });
         // Call server action to create session cookie
-        router.push("/dashboard");
+        // router.push("/dashboard");
         return { message: "success" }; // return a success message as the new state
     } catch (error: any) {
         console.log(error.message);

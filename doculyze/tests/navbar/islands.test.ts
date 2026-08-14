@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
     homeEntry,
-    showMarketing,
     authProfileLinks,
     showSignOut,
     MARKETING_ANCHORS,
@@ -39,10 +38,6 @@ describe("navbar islands", () => {
     });
 
     describe("marketing anchors", () => {
-        it("shows them to anonymous visitors only", () => {
-            expect(showMarketing(false)).toBe(true);
-            expect(showMarketing(true)).toBe(false);
-        });
 
         // These anchors target sections of the landing page. The nav now renders
         // on EVERY route from the root layout, so a bare "#features" would scroll

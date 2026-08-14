@@ -2,9 +2,11 @@
 
 Pure function of (uid, docId) against Firestore + Storage. Document-level
 failures become status `failed` and RETURN (the consumer acks); infrastructure
-failures RAISE (the consumer nacks to the DLQ). The only Firestore side effects
-this ticket are the status writes; parsed text is held in memory and discarded
-(persisting it + `processing -> ready` is ticket #5).
+failures RAISE (the consumer nacks to the DLQ). Chunks are persisted to the
+vector store through the tenant gateway (issue #29), so this job's Firestore
+side effects are status transitions ONLY — which is what restores the
+config.py safety invariant. A successful job ends at `ready` after the chunks
+are written and read back.
 
 MAIN INGESTING FUNCTION (entry point for processing a single document)
 """
@@ -14,12 +16,15 @@ from pathlib import Path
 
 
 
-from ingest.config import firestore_client, storage_bucket
-from ingest.firestore_status import Claim, claim_for_processing, mark_failed
+from ingest.chunker import chunk_markdown
+from ingest.config import chunk_output_dir, firestore_client, storage_bucket
+from ingest.embedding import create_embedder
+from ingest.firestore_status import Claim, claim_for_processing, mark_failed, mark_ready
 from ingest.parsers import needs_ocr_fallback, parser_for
 from ingest.paths import document_storage_path
 from ingest.precheck import precheck
 from ingest.sandbox import ParseError, run_parser_sandboxed
+from ingest.vector_store import chroma_client, get_user_chunks, write_user_chunks
 
 log = logging.getLogger("ingest")
 current_dir = Path(__file__).resolve().parent
@@ -63,19 +68,54 @@ def run_ingest_job(envelope: dict) -> str:
                 # Even OCR found nothing embeddable — that is a document-level
                 # failure, not a false success ending at `processing`.
                 raise ParseError("OCR fallback recovered no embeddable text")
-<<<<<<< HEAD
-
-        with open("/tmp/test_ocr.md", "w", encoding="utf-8") as f:
-                f.write(text)
-        log.info("Converted Markdown file at /tmp/test_ocr.md")  
-=======
->>>>>>> 8b824cd (The parsing pipeline in the ingest worker now performs pdf, docx, code, xml, html into Markdown conversion using a best-of-breed stack with pymupdf, default decode, and docling. Pymupdf works decently well with complex financial pdfs (tested on Google's 2026 annual report) and Docling works well with docx, xml, and html. For Chrome/Edge print from PDF and other miscellaneous scanned documents, Docling OCR is used.)
     except ParseError as exc:
         log.warning("parse failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)  # object retained
         return "skipped"
 
-    # Good file: ENDS at `processing` (ticket #5 takes it to `ready`).
-    log.info("parsed %s/%s: %d chars (held in memory only)", uid, doc_id, len(text))
-    snap = None  # discard the snapshot to free memory
+    # Good file: chunk the parsed text (document-level — mark_failed on error).
+    try:
+        chunks = chunk_markdown(text)
+    except (ValueError, TypeError) as exc:
+        log.warning("chunking failed for %s/%s: %s", uid, doc_id, exc)
+        mark_failed(db, uid, doc_id)
+        return "skipped"
+
+    token_counts = [c.tokens for c in chunks]
+    log.info(
+        "chunked %s/%s: %d chunks, %d total tokens (min=%d, max=%d, avg=%d)",
+        uid, doc_id, len(chunks),
+        sum(token_counts),
+        min(token_counts) if token_counts else 0,
+        max(token_counts) if token_counts else 0,
+        sum(token_counts) // len(token_counts) if token_counts else 0,
+    )
+
+    # Chunk file output is optional (infrastructure — errors propagate to DLQ).
+    out_dir = chunk_output_dir()
+    if out_dir:
+        doc_dir = Path(out_dir) / doc_id
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        for idx, c in enumerate(chunks):
+            (doc_dir / f"chunk_{idx:03d}.md").write_text(
+                f"<!-- {c.breadcrumb()} -->\n\n{c.content}", encoding="utf-8"
+            )
+
+    # Broad `except` per issue #29 acceptance: any embed/write failure (bad
+    # content OR a dead Voyage/Chroma) -> `failed`, never a job resting at
+    # `processing`. RESOLVED
+    # NOTE this deliberately diverges from CONTEXT.md, which
+    # routes dependency outages to the DLQ instead of `failed` — revisit if
+    # outage-vs-bad-document is ever split. Chunking's guard above stays narrow.
+    try:
+        write_user_chunks(chroma_client(), create_embedder(), uid, doc_id, chunks)
+    except Exception as exc:
+        log.warning("chunk write failed for %s/%s: %s, sending to DLQ", uid, doc_id, exc)
+
+    if not get_user_chunks(chroma_client(), uid, doc_id):
+        log.warning("chunk verification empty for %s/%s, sending to DLQ", uid, doc_id)
+        
+
+    mark_ready(db, uid, doc_id)
+    snap = None
     return "finished"

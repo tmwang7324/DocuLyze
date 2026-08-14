@@ -32,6 +32,45 @@ def textless_pdf_fixture(text: str = "INVOICE 12345\nTotal due 90234") -> bytes:
     return data
 
 
+EMBED_DIM = 8
+
+
+def fake_embedder():
+    """Deterministic stand-in for the Voyage client (issue #29): same text ->
+    same vector. No network, no API key — this is the seam create_embedder exists
+    to expose."""
+    import hashlib
+
+    def embed(texts, input_type):
+        assert input_type in ("document", "query")
+        vectors = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            vectors.append([digest[i] / 255.0 for i in range(EMBED_DIM)])
+        return vectors
+
+    return embed
+
+
+def fresh_chroma_client():
+    """An in-memory Chroma client whose `chunks` collection starts EMPTY.
+
+    chromadb caches one system per identifier, so repeated EphemeralClient()
+    calls share storage — dropping the collection is what actually makes a
+    test's state fresh.
+    """
+    import chromadb
+
+    from ingest.vector_store import COLLECTION
+
+    client = chromadb.EphemeralClient()
+    try:
+        client.delete_collection(COLLECTION)
+    except Exception:
+        pass  # first use of the session: nothing to drop
+    return client
+
+
 def reset_firestore() -> None:
     """Wipe Firestore docs only — no Storage emulator dependency (issue #12)."""
     host = os.environ["FIRESTORE_EMULATOR_HOST"]

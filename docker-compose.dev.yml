@@ -12,3 +12,5 @@ services:
   ingest-worker:
     environment:
       FIRESTORE_EMULATOR_HOST: host.docker.internal:8085
+    volumes:
+      - ./ingest-worker/chunk-output:/data/chunks

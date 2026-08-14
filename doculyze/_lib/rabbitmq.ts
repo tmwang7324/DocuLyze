@@ -1,5 +1,6 @@
 import "server-only";
 import amqp from "amqplib";
+import { logOperationalEvent } from "./operational_logger";
 
 // Topology — MUST match ingest-worker/src/ingest/consumer.py exactly. assertQueue
 // hard-fails on an argument mismatch, which is the drift alarm we want.
@@ -16,6 +17,21 @@ let warnedDisabled = false;
 // cosmetic — an unhandled 'error' event on an amqplib connection is re-thrown by
 // Node and crashes the process.
 let channelPromise: Promise<amqp.ConfirmChannel> | null = null;
+
+// The broker channel has no safe, stable public identifier to expose. This
+// process-local ID is attached to the object instead, so every cache hit is
+// traceable without logging a URL, credential, or broker implementation detail.
+const channelIds = new WeakMap<amqp.ConfirmChannel, string>();
+let nextChannelId = 1;
+
+function channelId(channel: amqp.ConfirmChannel): string {
+  let id = channelIds.get(channel);
+  if (!id) {
+    id = `channel-${nextChannelId++}`;
+    channelIds.set(channel, id);
+  }
+  return id;
+}
 
 async function connect(url: string): Promise<amqp.ConfirmChannel> {
   const invalidate = () => {
@@ -52,8 +68,12 @@ async function connect(url: string): Promise<amqp.ConfirmChannel> {
 // Non-async on purpose: assigning `channelPromise = connect(url)` synchronously,
 // before any await, is what makes concurrent callers share ONE connect (grill Q2).
 export function createChannel(): Promise<amqp.ConfirmChannel | null> {
+  // Every caller gets one correlated start and one terminal outcome, including
+  // callers that join an already-pending connection attempt.
+  logOperationalEvent("info", { operation: "createChannel", lifecycle: "started" });
   const url = process.env.RABBITMQ_URL;
   if (!url) {
+    logOperationalEvent("warn", { operation: "createChannel", lifecycle: "disabled" });
     if (!warnedDisabled) {
       console.info("RABBITMQ_URL unset — ingest disabled; uploads rest at 'uploaded'.");
       warnedDisabled = true;
@@ -61,10 +81,45 @@ export function createChannel(): Promise<amqp.ConfirmChannel | null> {
     return Promise.resolve(null);
   }
   if (!channelPromise) {
-    channelPromise = connect(url).catch((err) => {
-      channelPromise = null; // don't cache a rejected promise; next call retries
-      throw err; // propagates to finalizeUpload's swallow-and-log
+    const connecting = connect(url).then((channel) => {
+      // Assign on readiness, rather than promise creation: the ID names the
+      // usable channel callers receive, not an attempt that may still fail.
+      channelId(channel);
+      return channel;
     });
+    channelPromise = connecting;
+    return connecting.then(
+      (channel) => {
+        logOperationalEvent("info", {
+          operation: "createChannel",
+          lifecycle: "created",
+          channelId: channelId(channel),
+        });
+        return channel;
+      },
+      (error) => {
+        // A rejected promise must never poison the cache; the next caller gets
+        // a fresh connection attempt just as it did before instrumentation.
+        if (channelPromise === connecting) channelPromise = null;
+        logOperationalEvent("error", { operation: "createChannel", lifecycle: "failed", error });
+        throw error; // propagates to finalizeUpload's swallow-and-log
+      },
+    );
   }
-  return channelPromise;
+  return channelPromise.then(
+    (channel) => {
+      // `channelId` is stable for the lifetime of the cached channel, so a
+      // concurrent caller can be tied back to the channel it actually shared.
+      logOperationalEvent("info", {
+        operation: "createChannel",
+        lifecycle: "reused",
+        channelId: channelId(channel),
+      });
+      return channel;
+    },
+    (error) => {
+      logOperationalEvent("error", { operation: "createChannel", lifecycle: "failed", error });
+      throw error;
+    },
+  );
 }

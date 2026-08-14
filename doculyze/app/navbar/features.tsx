@@ -9,13 +9,17 @@
 
 import Link from "next/link";
 import { getCurrentUid } from "@/_lib/data";
-import { MARKETING_ANCHORS, showMarketing } from "./nav_model";
+import { MARKETING_ANCHORS } from "./nav_model";
 import type { NavLayout } from "./layout_classes";
 import { navLinkClass } from "./layout_classes";
 
 export default async function Features({ layout }: { layout: NavLayout }) {
-    if (!showMarketing((await getCurrentUid()) !== null)) {
-        return null;
+    if ((await getCurrentUid()) !== null) {
+        return MARKETING_ANCHORS.filter(({ href, label }) => label === "How to use").map(({ href, label }) => (
+            <Link key={href} href={href} className={navLinkClass(layout)}>
+                {label}
+            </Link>
+        ));
     }
     return (
         <>

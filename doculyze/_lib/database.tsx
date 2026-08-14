@@ -3,6 +3,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db, storage } from "@/_lib/admin";
 import { requireUid } from "@/_lib/data";
 import { formatBytes } from "@/_lib/fileupload_schema";
+import { logOperationalEvent } from "@/_lib/operational_logger";
 import { createHash } from 'crypto';
 
 
@@ -51,13 +52,30 @@ export async function createUserProfile(input: {
     password: string, 
     sessionCookie: string 
 }): Promise<string> {
-    const uid = await requireUid();
-    db.collection("users").doc(uid).set({
-        email: input.email,
-        password: input.password,
-        sessionCookie: input.sessionCookie
-    }, { merge: true });
-    return uid;
+    const startedAt = Date.now();
+    try {
+        const uid = await requireUid();
+        await db.collection("users").doc(uid).set({
+            email: input.email,
+            password: input.password,
+            sessionCookie: input.sessionCookie
+        }, { merge: true });
+        // Profile writes identify only the authenticated owner; credentials and contact data never leave the DAL.
+        logOperationalEvent("info", {
+            operation: "createUserProfile",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+            userId: uid,
+        });
+        return uid;
+    } catch (error) {
+        logOperationalEvent("error", {
+            operation: "createUserProfile",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
+    }
 }
 
 // Storage object path for a user's document, keyed by the server docId (NOT the
@@ -87,16 +105,7 @@ export const SIGNED_URL_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // mean downloading every candidate.
 //
 // Which existing records block a new upload of that pair:
-//   uploaded / processing / ready — the document is already in the archive.
-//                                   This is the duplicate we exist to prevent.
-//   pending, minted < SIGNED_URL_TTL_MS ago — an upload of the same file is in
-//                                   flight (double submit, two tabs). Blocking
-//                                   is what stops the race producing two copies.
-//   pending, older than that      — its signed URL has expired, so no PUT can
-//                                   still land against it: the record is
-//                                   abandoned, not a claim, and must NOT block
-//                                   the user's retry. (The reap clears it.)
-//   failed                        — a rejected upload has to stay retryable.
+//   processing / ready — already queued; block.
 export class DuplicateDocumentError extends Error {
     constructor(
         message: string,
@@ -108,17 +117,8 @@ export class DuplicateDocumentError extends Error {
     }
 }
 
-const SETTLED_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["uploaded", "processing", "ready"]);
-
-// Does this existing record make (file_name, size) unavailable right now?
-function blocksDuplicate(status: unknown, uploadedAt: unknown): boolean {
-    if (typeof status !== "string") return false;
-    if (SETTLED_BLOCKING_STATUSES.has(status)) return true;
-    if (status !== "pending") return false;
-    // A serverTimestamp is briefly absent between the write and the server
-    // resolving it — that record was minted moments ago, so treat it as live.
-    if (!(uploadedAt instanceof Timestamp)) return true;
-    return Date.now() - uploadedAt.toMillis() < SIGNED_URL_TTL_MS;
+function blocksDuplicate(status: unknown): boolean {
+    return status === "processing" || status === "ready" || status === "pending";
 }
 
 // Do these two filenames name the same document? Case-insensitive, and both
@@ -163,37 +163,58 @@ export async function mintDocumentRecord(input: {
     size: number;
     status: string;
 }): Promise<{ docId: string; storagePath: string }> {
-    const uid = await requireUid();
-    const docId = documentsCol(uid).doc().id;
-    const storagePath = documentStoragePath(uid, docId);
-    const sameSize = documentsCol(uid).where("size", "==", input.size);
-    await db.runTransaction(async (tx) => {
-        const existing = await tx.get(sameSize);
-        for (const doc of existing.docs) {
-            const fileName = doc.get("file_name") as unknown;
-            if (!sameDocumentName(fileName, input.file_name)) continue;
-            const status = doc.get("status") as DocStatus;
-            if (blocksDuplicate(status, doc.get("uploadedAt"))) {
-                throw new DuplicateDocumentError(
-                    duplicateMessage(fileName as string, input.size, status),
-                    doc.id,
-                    status,
-                );
+    const startedAt = Date.now();
+    try {
+        const uid = await requireUid();
+        const docId = documentsCol(uid).doc().id;
+        const storagePath = documentStoragePath(uid, docId);
+        const sameSize = documentsCol(uid).where("size", "==", input.size);
+        await db.runTransaction(async (tx) => {
+            const existing = await tx.get(sameSize);
+            for (const doc of existing.docs) {
+                const fileName = doc.get("file_name") as unknown;
+                if (!sameDocumentName(fileName, input.file_name)) continue;
+                const status = doc.get("status") as DocStatus;
+                if (blocksDuplicate(status)) {
+                    throw new DuplicateDocumentError(
+                        duplicateMessage(fileName as string, input.size, status),
+                        doc.id,
+                        status,
+                    );
+                }
             }
-        }
-        tx.set(documentsCol(uid).doc(docId), {
-            docId: docId,
-            file_name: input.file_name,
-            title: input.title,
-            storagePath: storagePath,
-            contentType: input.contentType,
-            size: input.size,
-            version: 1,
-            status: input.status,
-            uploadedAt: FieldValue.serverTimestamp(),
+            tx.set(documentsCol(uid).doc(docId), {
+                docId: docId,
+                file_name: input.file_name,
+                title: input.title,
+                storagePath: storagePath,
+                contentType: input.contentType,
+                size: input.size,
+                version: 1,
+                status: input.status,
+                uploadedAt: FieldValue.serverTimestamp(),
+            });
         });
-    });
-    return { docId, storagePath: storagePath };
+        // The generated ID and state identify the write without revealing user-supplied document metadata.
+        logOperationalEvent("info", {
+            operation: "mintDocumentRecord",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+            docId,
+            status: input.status,
+        });
+        return { docId, storagePath: storagePath };
+    } catch (error) {
+        // Duplicate messages include the stored filename, so classify the expected rejection without serializing it.
+        const duplicate = error instanceof DuplicateDocumentError;
+        logOperationalEvent(duplicate ? "warn" : "error", {
+            operation: "mintDocumentRecord",
+            lifecycle: duplicate ? "rejected" : "failed",
+            durationMs: Date.now() - startedAt,
+            ...(duplicate ? { reason: "duplicate_document" } : {}),
+        });
+        throw error;
+    }
 }
 
 export async function finalizeDocumentRecord(input: {
@@ -204,15 +225,33 @@ export async function finalizeDocumentRecord(input: {
     size: number;
     status: string;
 }): Promise<void> {
-    const uid = await requireUid();
-    await documentsCol(uid).doc(input.docId).update({
-        file_name: input.file_name,
-        title: input.title,
-        contentType: input.contentType,
-        size: input.size,
-        status: input.status,
-        uploadedAt: FieldValue.serverTimestamp(),
-    });
+    const startedAt = Date.now();
+    try {
+        const uid = await requireUid();
+        await documentsCol(uid).doc(input.docId).update({
+            file_name: input.file_name,
+            title: input.title,
+            contentType: input.contentType,
+            size: input.size,
+            status: input.status,
+            uploadedAt: FieldValue.serverTimestamp(),
+        });
+        // This write is keyed by docId; status is sufficient operational context without logging document metadata.
+        logOperationalEvent("info", {
+            operation: "finalizeDocumentRecord",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+            docId: input.docId,
+            status: input.status,
+        });
+    } catch (error) {
+        logOperationalEvent("error", {
+            operation: "finalizeDocumentRecord",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
+    }
 }
 
 // A pending record is "stale" once it's older than this. Must stay comfortably
@@ -238,6 +277,8 @@ export const STALE_PENDING_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 // with no bytes) is the one this ordering makes impossible.
 // Returns the number of records reaped.
 export async function reapStalePendingDocuments(): Promise<number> {
+    const startedAt = Date.now();
+    try {
     // checkRevoked off, despite being a write: reap rides the dashboard's hot
     // read path, and it only ever deletes the caller's own already-abandoned
     // pending records — nothing a revoked session could gain from.
@@ -264,7 +305,22 @@ export async function reapStalePendingDocuments(): Promise<number> {
             .delete({ ignoreNotFound: true }); // "if the bytes landed" — a never-PUT upload has no object
         reaped++;
     }
-    return reaped;
+        // Counts reveal cleanup health without identifying any abandoned document.
+        logOperationalEvent("info", {
+            operation: "reapStalePendingDocuments",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+            reapedCount: reaped,
+        });
+        return reaped;
+    } catch (error) {
+        logOperationalEvent("error", {
+            operation: "reapStalePendingDocuments",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
+    }
 }
 
 // List the verified user's documents, newest first. Returns EVERY lifecycle state
@@ -272,7 +328,30 @@ export async function reapStalePendingDocuments(): Promise<number> {
 // (#2 checkbox 5). The previous status == "uploaded" filter hid pending and failed,
 // which made abandoned and rejected uploads invisible to their own owner.
 export async function listDocuments(): Promise<DocumentRecord[]> {
-    const uid = await requireUid(false);
-    const snap = await documentsCol(uid).orderBy("uploadedAt", "desc").get();
-    return snap.docs.map((d) => ({ docId: d.id, ...(d.data() as Omit<DocumentRecord, "docId">) }));
+    const startedAt = Date.now();
+    try {
+        const uid = await requireUid(false);
+        const snap = await documentsCol(uid).orderBy("uploadedAt", "desc").get();
+        const documents = snap.docs.map((d) => ({ docId: d.id, ...(d.data() as Omit<DocumentRecord, "docId">) }));
+        // Aggregate lifecycle state, never document fields, so dashboard reads stay observable without exposing content.
+        const statusCounts = documents.reduce<Record<string, number>>((counts, document) => {
+            counts[document.status] = (counts[document.status] ?? 0) + 1;
+            return counts;
+        }, {});
+        logOperationalEvent("info", {
+            operation: "listDocuments",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+            documentCount: documents.length,
+            statusCounts,
+        });
+        return documents;
+    } catch (error) {
+        logOperationalEvent("error", {
+            operation: "listDocuments",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+        });
+        throw error;
+    }
 }

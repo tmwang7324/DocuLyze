@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { isTerminalDocStatus, type EnqueueOutcome } from "@/_lib/ingest_contract";
-
+import router from "next/navigation";
 // Pipeline progress view (issue #10): the byte-progress bar hands off, on
 // finalize, into a step view — Uploading -> Queued -> Parsing -> Ready — driven
 // by the per-document SSE stream. "Uploading" is local XHR progress (never in

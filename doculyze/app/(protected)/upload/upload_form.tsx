@@ -183,16 +183,61 @@ export default function UploadForm() {
                         />
                     </div>
 
-                    <FileDropzone onFileAccepted={(f) => setFileObj(prev => ({ ...prev, file: f, url: URL.createObjectURL(f)}))}
-                        onFileCleared={() => {
-                            setFileObj(prev => {
-                                if(prev.url) {
-                                    URL.revokeObjectURL(prev.url);
-                                }
-                                return { ...prev, file: null, url: "" };
-                            })}
-                        }
-                    />
+                    {fileObj.file ? (() => {
+                        const t = fileObj.file.type;
+                        const previewable = t === "application/pdf" || t.startsWith("text/") || t === "application/json";
+                        return (
+                            <div className="flex flex-col gap-3">
+                                {previewable ? (
+                                    <div className="flex flex-col gap-2">
+                                        <div className="flex items-baseline justify-between">
+                                            <p className="font-display text-sm font-bold uppercase text-dark truncate">
+                                                {fileObj.file.name}
+                                            </p>
+                                            <p className="font-mono-label text-[10px] tracking-wider uppercase text-muted shrink-0 ml-3">
+                                                Ready to upload
+                                            </p>
+                                        </div>
+                                        <iframe
+                                            src={fileObj.url}
+                                            title={fileObj.file.name}
+                                            className="h-96 w-full border-2 border-dashed border-orange-primary bg-off-white"
+                                        />
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-orange-primary bg-orange-pale px-6 py-10 text-center">
+                                        <p className="font-display text-2xl font-bold uppercase text-dark truncate max-w-full">
+                                            {fileObj.file.name}
+                                        </p>
+                                        <p className="font-mono-label text-[10px] tracking-wider uppercase text-muted">
+                                            Ready to upload
+                                        </p>
+                                    </div>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (fileObj.url) URL.revokeObjectURL(fileObj.url);
+                                        setFileObj(prev => ({ ...prev, file: null, url: "" }));
+                                    }}
+                                    className="self-start font-mono-label text-[10px] tracking-wider uppercase text-muted hover:text-orange-primary transition-colors"
+                                >
+                                    Attach new file
+                                </button>
+                            </div>
+                        );
+                    })() : (
+                        <FileDropzone onFileAccepted={(f) => setFileObj(prev => ({ ...prev, file: f, url: URL.createObjectURL(f)}))}
+                            onFileCleared={() => {
+                                setFileObj(prev => {
+                                    if(prev.url) {
+                                        URL.revokeObjectURL(prev.url);
+                                    }
+                                    return { ...prev, file: null, url: "" };
+                                })}
+                            }
+                        />
+                    )}
 
                     <button
                         type="submit"
@@ -203,28 +248,6 @@ export default function UploadForm() {
                     </button>
                 </form>
 
-                <div>
-                    {fileObj.file && (() => {
-                        const t = fileObj.file.type;
-                        if (t === "application/pdf" || t.startsWith("text/") || t === "application/json") {
-                            return (
-                                <iframe
-                                    src={fileObj.url}
-                                    title={fileObj.file.name}
-                                    className="mt-6 h-96 w-full border border-hairline bg-off-white"
-                                />
-                            );
-                        }
-                        // .doc/.docx and other non-previewable types — no browser renderer exists
-                        return (
-                            <div className="mt-6 border border-hairline bg-off-white px-4 py-3 text-sm text-muted">
-                                No inline preview for{" "}
-                                <span className="font-mono-label text-dark text-xs">{fileObj.file.name}</span>{" "}
-                                — the browser has no renderer for this format.
-                            </div>
-                        );
-                    })()}
-                </div>
             </div>
 
             {pipeline && (

@@ -36,6 +36,22 @@ def db():
 
 
 @pytest.fixture()
+def fake_embedder():
+    """Deterministic embed_fn (issue #29) — see support.fake_embedder."""
+    import support
+
+    return support.fake_embedder()
+
+
+@pytest.fixture()
+def chroma_client():
+    """In-memory Chroma with an empty `chunks` collection (issue #29)."""
+    import support
+
+    return support.fresh_chroma_client()
+
+
+@pytest.fixture()
 def clean_emulators():
     """Wipe Firestore docs + Storage objects so each case starts empty."""
     import support

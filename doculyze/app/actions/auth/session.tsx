@@ -1,15 +1,20 @@
 "use server";
 import { adminAuth } from "@/_lib/admin";
-import { auth } from "@/_lib/firebase";
-import { User } from "firebase/auth"; //user.
 import { cookies } from "next/headers";
 import { ResponseCookie } from "next/dist/compiled/@edge-runtime/cookies";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createUserProfile } from "@/_lib/database";
+import { logOperationalEvent, runWithRequestContext } from "@/_lib/operational_logger";
 
 
 export async function createRefresh(password: string, idToken: string): Promise<string | null> {
+    // Preserve one request ID across token verification, session creation, and profile setup.
+    return runWithRequestContext(async () => {
+    const startedAt = Date.now();
+    let terminalLogged = false;
+    logOperationalEvent("info", { operation: "createRefresh", lifecycle: "started" });
+    try {
     //let idToken;
     const cookieStore = await cookies();
     const decodedToken = await adminAuth.verifyIdToken(idToken, true);
@@ -25,6 +30,13 @@ export async function createRefresh(password: string, idToken: string): Promise<
             if (decodedClaims) {
                 if (decodedClaims.sub === uid && decodedClaims.exp * 1000 > Date.now()) {
                     console.log("Valid session cookie for user:", uid);
+                    // A reused valid cookie is a successful terminal outcome too.
+                    logOperationalEvent("info", {
+                        operation: "createRefresh",
+                        lifecycle: "succeeded",
+                        durationMs: Date.now() - startedAt,
+                    });
+                    terminalLogged = true;
                     return existingCookie.value; // Return the existing valid session cookie
                 }
                 // If the session cookie is valid, you can perform any necessary actions here.
@@ -52,11 +64,35 @@ export async function createRefresh(password: string, idToken: string): Promise<
     // login renders the (protected) layout fresh, so the nav is right there — but
     // without this, a later visit to / would serve the cached signed-out nav.
     revalidatePath("/", "layout");
+    // Redirect throws by design, so record success before it leaves this action.
+    logOperationalEvent("info", {
+        operation: "createRefresh",
+        lifecycle: "succeeded",
+        durationMs: Date.now() - startedAt,
+    });
+    terminalLogged = true;
     redirect("/dashboard");
     // return refreshCookie; // Return the newly created session cookie
+    } catch (error) {
+        // A redirect after a recorded success is not an operation failure.
+        if (!terminalLogged) {
+            logOperationalEvent("error", {
+                operation: "createRefresh",
+                lifecycle: "failed",
+                durationMs: Date.now() - startedAt,
+                reason: "authentication_failed",
+            });
+        }
+        throw error;
+    }
+    });
 }
 
-export async function revokeSession() {
+export async function revokeSession(): Promise<void> {
+    // Preserve one request ID across session verification, token revocation, and cookie cleanup.
+    return runWithRequestContext(async () => {
+    const startedAt = Date.now();
+    logOperationalEvent("info", { operation: "revokeSession", lifecycle: "started" });
     try {
         const cookieStore = await cookies();
         const sessionCookieString = cookieStore.get("refresh")?.value || '';
@@ -67,7 +103,21 @@ export async function revokeSession() {
         await adminAuth.revokeRefreshTokens(decodedClaims.sub);
         cookieStore.delete("refresh");
         cookieStore.delete("access");
+        // Redirect throws, so the terminal success event must be recorded first.
+        logOperationalEvent("info", {
+            operation: "revokeSession",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+        });
     } catch (error) {
+        // Preserve the existing best-effort sign-out: even an invalid or expired
+        // session proceeds to local cookie invalidation and the login redirect.
+        logOperationalEvent("error", {
+            operation: "revokeSession",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+            reason: "session_revocation_failed",
+        });
         console.log(error);
     }
     // Issue #21: same reason as createRefresh — drops the cached (public) layout
@@ -75,6 +125,7 @@ export async function revokeSession() {
     // needs no invalidation: its group hardcodes the signed-out nav.
     revalidatePath("/", "layout");
     redirect("/login");
+    });
 }
 
 export async function createAccess(refreshCookie: string) {

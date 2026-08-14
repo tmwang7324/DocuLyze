@@ -18,11 +18,7 @@
 // skeleton, no layout shift, a correct nav in the first byte, at the price of
 // every route rendering dynamically. Adding Suspense — or cacheComponents:true,
 // which requires it — is the way back if that cost ever shows up.
-//
-// Presentation only, and not a trust boundary: /login and /register currently
-// receive the same bar as any other route (the old "auth" variant is a separate
-// question), every protected route still gates on (protected)/layout.tsx, and
-// every write still derives its uid from the cookie via requireUid().
+
 
 import Link from "next/link";
 import HomeLink from "./home_link";

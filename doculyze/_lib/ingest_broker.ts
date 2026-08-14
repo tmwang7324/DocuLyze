@@ -1,57 +1,71 @@
 import "server-only";
 import { createChannel } from "./rabbitmq";
+import { logOperationalEvent, runWithRequestContext } from "./operational_logger";
 
-// The ingest producer (issue #4). Publishes the pointer envelope {uid, docId} —
-// never bytes — onto the durable queue after finalize flips a record to `uploaded`.
-// Broker-agnostic beyond this module + the worker's consumer shell (ADR-0001).
-// Connection lifecycle + topology declaration live in ./rabbitmq (getChannel).
+// The ingest producer (issue #4). Publishes the pointer envelope {uid, docId}
+// onto the durable queue after finalize flips a record to `uploaded`.
 const QUEUE = process.env.INGEST_QUEUE ?? "doc.ingest";
 const CONFIRM_TIMEOUT_MS = 5000;
 
-// Issue #10 enqueue-outcome contract: a resolve means the broker durably
-// confirmed the envelope (`queued`). Every other outcome rejects, and the two
-// classes below are how finalizeUpload tells "definitely not enqueued" apart
-// from "may have landed" — the mapping stays this thin on purpose.
+// A resolve means the broker durably confirmed the envelope (`queued`). These
+// classes preserve the existing distinction between definite non-enqueue and a
+// confirm timeout where the envelope may have landed.
 export class IngestConfirmTimeoutError extends Error {}
 export class IngestDisabledError extends Error {}
 
 export async function publishIngestJob(uid: string, docId: string): Promise<void> {
-  const ch = await createChannel();
-  if (!ch) {
-    // Ingest disabled (RABBITMQ_URL unset) — doc rests at `uploaded`. A silent
-    // resolve here would misreport `queued` to the caller (issue #10), so this
-    // is now a definite (recoverable) failure instead of a no-op.
-    throw new IngestDisabledError("ingest disabled: RABBITMQ_URL unset");
-  }
+  return runWithRequestContext(async () => {
+    const startedAt = Date.now();
+    logOperationalEvent("info", { operation: "publishIngestJob", lifecycle: "started" });
 
-  const body = Buffer.from(JSON.stringify({ uid, docId })); // exactly two fields
+    try {
+      const ch = await createChannel();
+      if (!ch) {
+        throw new IngestDisabledError("ingest disabled: RABBITMQ_URL unset");
+      }
 
-  // Confirmed publish (grill Q3/Q4). The confirm-channel callback fires only after
-  // the broker has durably accepted the persistent message onto the durable queue,
-  // so a silently-dropped producer->broker hop can no longer leave a doc stuck at
-  // `uploaded` unnoticed. Bounded by a timeout so a stalled broker can't hang the
-  // user's finalizeUpload request — on timeout we treat the outcome as unknown and
-  // let the #9 re-publish sweep reconcile. finalizeUpload swallow-and-logs any
-  // throw here, so an enqueue failure never fails the upload itself.
-  // One-shot, no retries: a timeout may have landed anyway (retry = duplicate),
-  // and a definite failure means the broker is down or dying — the sweep, not an
-  // immediate same-broker retry, is the recovery path.
-  // (Backpressure/'drain' handling is elided: uploads are human-paced.)
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new IngestConfirmTimeoutError("ingest publish confirm timed out")),
-      CONFIRM_TIMEOUT_MS,
-    );
-    ch.sendToQueue(
-      QUEUE,
-      body,
-      { persistent: true, contentType: "application/json" },
-      (err) => {
-        clearTimeout(timer);
-        if (err) reject(err);
-        else resolve();
-      },
-    );
+      const body = Buffer.from(JSON.stringify({ uid, docId })); // exactly two fields
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new IngestConfirmTimeoutError("ingest publish confirm timed out")),
+          CONFIRM_TIMEOUT_MS,
+        );
+        ch.sendToQueue(
+          QUEUE,
+          body,
+          { persistent: true, contentType: "application/json" },
+          (err) => {
+            clearTimeout(timer);
+            if (err) reject(err);
+            else resolve();
+          },
+        );
+      });
+
+      logOperationalEvent("info", {
+        operation: "publishIngestJob",
+        lifecycle: "queued",
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      if (error instanceof IngestConfirmTimeoutError) {
+        logOperationalEvent("warn", {
+          operation: "publishIngestJob",
+          lifecycle: "unknown",
+          durationMs: Date.now() - startedAt,
+          reason: "confirm_timeout",
+          message: "Ingest enqueue confirmation timed out; the message may have been delivered.",
+        });
+      } else {
+        logOperationalEvent("error", {
+          operation: "publishIngestJob",
+          lifecycle: "failed",
+          durationMs: Date.now() - startedAt,
+          // Broker errors can include connection details; retain only a safe reason.
+          reason: "publish_failed",
+        });
+      }
+      throw error;
+    }
   });
-  console.log("Ingest job published (confirmed) for", uid, docId);
 }

@@ -1,6 +1,6 @@
 
-from markitdown import MarkItDown
 from ingest.parsers import PARSERS
+from ingest.chunker import Chunk, chunk_markdown
 from pathlib import Path
 import os
 
@@ -81,15 +81,16 @@ def pdf_parse_smol_docling(source_pdf: str, pdf_output: Path):
     # Path(output / "marker-output.md").write_text(text, encoding="utf-8")
     # print(f"Marker conversion finished: {source}")
 
+
 def main():
     
     # Source document to convert
     source_docx = "C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\2025_AnnualReport.docx"
-    source_pdf = "C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\Google_Financial_Report.pdf"
-    source_html = "C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\index.html"
-    pdf_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\pdf\\")
-    docx_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\docx\\")
-    html_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\src\\ingest\\experimental_results\\html\\")
+    source_pdf = "C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\2026q1-alphabet-earnings-release.pdf"
+    source_html = "C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\index.html"
+    pdf_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\pdf\\")
+    docx_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\docx\\")
+    html_output = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\html\\")
     # pure docling
     # converter = DocumentConverter()
     # doc = converter.convert(source=source).document
@@ -100,6 +101,18 @@ def main():
 
     
     pdf_parse(source_pdf, pdf_output)
+
+    md_text = Path(pdf_output / "pdf-text-output.md").read_text(encoding="utf-8", errors="replace")
+    chunks = chunk_markdown(md_text)
+    chunk_dir = Path("C:\\Users\\jw300\\DocuLyze\\ingest-worker\\experimental_results\\chunks")
+    chunk_dir.mkdir(exist_ok=True)
+    for f in chunk_dir.glob("*.md"):
+        f.unlink()
+    for idx, c in enumerate(chunks):
+        header = f"<!-- {c.breadcrumb()} -->\n\n" if c.breadcrumb() else ""
+        Path(chunk_dir / f"chunk_{idx:03d}.md").write_text(header + c.content, encoding="utf-8")
+        print(f"Chunk {idx}: {c.tokens} tokens | {c.breadcrumb()}")
+
     # pdf_parse_smol_docling(source_pdf, pdf_output)
 
     # marker (datalab-to/marker) — build the model dict once and reuse across

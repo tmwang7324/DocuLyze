@@ -55,3 +55,10 @@ export function authProfileLinks(authed: boolean): readonly NavCta[] {
           ];
 }
 
+// Signing out is only meaningful while a session is active. Keeping this rule
+// beside the other nav-state decisions ensures every island uses the same view
+// of authentication.
+export function showSignOut(authed: boolean): boolean {
+    return authed;
+}
+

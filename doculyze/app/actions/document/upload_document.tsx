@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { validateUploadClaim, resolveContentType, MIN_FILE_SIZE, MAX_FILE_SIZE } from '@/_lib/fileupload_schema';
 import { publishIngestJob, IngestConfirmTimeoutError, IngestDisabledError } from '@/_lib/ingest_broker';
 import type { FinalizeResult } from '@/_lib/ingest_contract';
+import { logOperationalEvent, runWithRequestContext } from '@/_lib/operational_logger';
 
 type DocFormState = {
     message: string;
@@ -30,11 +31,22 @@ export async function getPresignedUrl(
     fileName: string,
     title: string,
     size: number): Promise<PresignResult> {
+    return runWithRequestContext(async () => {
+    const startedAt = Date.now();
+    logOperationalEvent("info", { operation: "getPresignedUrl", lifecycle: "started" });
+    try {
+    // Log at the server boundary: the shared schema stays client-safe and claim text stays out of logs.
     // Validate the metadata claim with zod before doing anything.
     const parsed = validateUploadClaim({ file_name: fileName, title, size });
     if (parsed !== undefined) {
+        logOperationalEvent("info", {
+            operation: "validateUploadClaim",
+            lifecycle: "failed",
+            reason: "claim_rejected",
+        });
         throw new Error(parsed);
     }
+    logOperationalEvent("info", { operation: "validateUploadClaim", lifecycle: "passed" });
     // Policy B: the server derives the canonical content-type from the extension, never
     // the client's file.type (see GRILL Q6). This is what gets signed, echoed by the
     // client's PUT header, and stored on the object. (The zod claim already rejected
@@ -68,17 +80,44 @@ export async function getPresignedUrl(
         });
         // The client needs docId to finalize, and contentType to echo into the PUT header
         // (its own file.type is untrusted — Policy B). The signed URL pins this same type.
+        logOperationalEvent("info", {
+            operation: "getPresignedUrl",
+            lifecycle: "succeeded",
+            durationMs: Date.now() - startedAt,
+        });
         return { url, docId, contentType };
     } catch (error) {
         // A duplicate is a refusal, not a fault: nothing was minted, nothing was
         // signed, and the user needs to be told WHY rather than seeing the
-        // generic "couldn't get a URL". Not logged as an error for the same reason.
+        // generic "couldn't get a URL". Keep the log free of that sensitive text too.
         if (error instanceof DuplicateDocumentError) {
+            logOperationalEvent("warn", {
+                operation: "getPresignedUrl",
+                lifecycle: "rejected",
+                durationMs: Date.now() - startedAt,
+                reason: "duplicate_document",
+            });
             return { url: "", docId: "", contentType: "", error: error.message };
         }
+        logOperationalEvent("error", {
+            operation: "getPresignedUrl",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+            reason: "presign_failed",
+        });
         console.error("Error generating presigned URL:", error);
         return { url: "", docId: "", contentType: "" };
     }
+    } catch (error) {
+        logOperationalEvent("error", {
+            operation: "getPresignedUrl",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+            reason: "validation_failed",
+        });
+        throw error;
+    }
+    });
 }
 
 // Called by the client AFTER the direct PUT to Storage succeeds. Verifies the object
@@ -96,6 +135,11 @@ export async function finalizeUpload(
     size: number,
     contentType: string,
     title: string): Promise<FinalizeResult> {
+    // One request context keeps storage and broker events traceable as one upload.
+    return runWithRequestContext(async () => {
+    const startedAt = Date.now();
+    logOperationalEvent("info", { operation: "finalizeUpload", lifecycle: "started" });
+    try {
     const uid = await getCurrentUid();
     if (!uid) {
         redirect("/login");
@@ -133,20 +177,53 @@ export async function finalizeUpload(
     //             sweep remains the recovery owner. Record stays `uploaded` always.
     try {
         await publishIngestJob(uid, docId);
+        // Exactly one terminal event describes the same enqueue outcome we return.
+        logOperationalEvent("info", {
+            operation: "finalizeUpload",
+            lifecycle: "queued",
+            durationMs: Date.now() - startedAt,
+        });
         return { enqueue: "queued" };
     } catch (err) {
         if (err instanceof IngestConfirmTimeoutError) {
-            console.warn("ingest enqueue outcome unknown (confirm timeout):", docId);
+            logOperationalEvent("warn", {
+                operation: "finalizeUpload",
+                lifecycle: "unknown",
+                durationMs: Date.now() - startedAt,
+                reason: "confirm_timeout",
+                message: "Ingest enqueue confirmation timed out; the message may have been delivered.",
+            });
             return { enqueue: "unknown" };
         }
         if (err instanceof IngestDisabledError) {
             // Expected in broker-less dev — definite non-enqueue, but not an error.
-            console.info("ingest disabled; doc rests at uploaded:", docId);
+            logOperationalEvent("error", {
+                operation: "finalizeUpload",
+                lifecycle: "failed",
+                durationMs: Date.now() - startedAt,
+                reason: "ingest_disabled",
+            });
             return { enqueue: "failed" };
         }
-        console.error("ingest enqueue failed; doc stuck at uploaded:", docId, err);
+        logOperationalEvent("error", {
+            operation: "finalizeUpload",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+            reason: "ingest_enqueue_failed",
+        });
         return { enqueue: "failed" };
     }
+    } catch (error) {
+        // The rethrow is intentional: observability must not change upload failures.
+        logOperationalEvent("error", {
+            operation: "finalizeUpload",
+            lifecycle: "failed",
+            durationMs: Date.now() - startedAt,
+            reason: "storage_or_lifecycle_failed",
+        });
+        throw error;
+    }
+    });
 }
 
 // export async function createPresignedUrl(filePath: string, contentType: string): Promise<string> {
