@@ -105,7 +105,20 @@ export const SIGNED_URL_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // mean downloading every candidate.
 //
 // Which existing records block a new upload of that pair:
-//   processing / ready — already queued; block.
+//   processing / ready — the document is already in the pipeline or the
+//                                   archive. This is the duplicate we exist to prevent.
+//   uploaded                      — the bytes landed but ingest never picked the
+//                                   document up (e.g. the enqueue failed), so
+//                                   re-uploading is how it gets processed: must
+//                                   NOT block.
+//   pending, minted < SIGNED_URL_TTL_MS ago — an upload of the same file is in
+//                                   flight (double submit, two tabs). Blocking
+//                                   is what stops the race producing two copies.
+//   pending, older than that      — its signed URL has expired, so no PUT can
+//                                   still land against it: the record is
+//                                   abandoned, not a claim, and must NOT block
+//                                   the user's retry. (The reap clears it.)
+//   failed                        — a rejected upload has to stay retryable.
 export class DuplicateDocumentError extends Error {
     constructor(
         message: string,
@@ -117,8 +130,17 @@ export class DuplicateDocumentError extends Error {
     }
 }
 
-function blocksDuplicate(status: unknown): boolean {
-    return status === "processing" || status === "ready" || status === "pending";
+
+
+// Does this existing record make (file_name, size) unavailable right now?
+function blocksDuplicate(status: unknown, uploadedAt: unknown): boolean {
+    if (typeof status !== "string") return false;
+    if (status === "processing" || status === "ready") return true;
+    if (status !== "pending") return false;
+    // A serverTimestamp is briefly absent between the write and the server
+    // resolving it — that record was minted moments ago, so treat it as live.
+    if (!(uploadedAt instanceof Timestamp)) return true;
+    return Date.now() - uploadedAt.toMillis() < SIGNED_URL_TTL_MS;
 }
 
 // Do these two filenames name the same document? Case-insensitive, and both
@@ -175,7 +197,7 @@ export async function mintDocumentRecord(input: {
                 const fileName = doc.get("file_name") as unknown;
                 if (!sameDocumentName(fileName, input.file_name)) continue;
                 const status = doc.get("status") as DocStatus;
-                if (blocksDuplicate(status)) {
+                if (blocksDuplicate(status, doc.get("uploadedAt"))) {
                     throw new DuplicateDocumentError(
                         duplicateMessage(fileName as string, input.size, status),
                         doc.id,

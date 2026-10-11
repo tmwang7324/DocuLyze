@@ -55,11 +55,16 @@ beforeEach(async () => {
 });
 
 describe("duplicate gate — (file_name, size) identity at the mint seam", () => {
-  it("refuses a second upload of the same name and size once the first is uploaded", async () => {
-    await seedRecord("uploaded");
+  // An `uploaded` record's bytes landed but ingest never picked it up (e.g. the
+  // enqueue failed) — re-uploading is how the user gets it processed.
+  it("allows re-uploading a file whose earlier upload never reached ingest (uploaded)", async () => {
+    const { docId: stuck } = await seedRecord("uploaded");
 
-    await expect(seedRecord("pending")).rejects.toBeInstanceOf(DuplicateDocumentError);
-    expect(await listUserDocuments(UID)).toHaveLength(1); // no second record minted
+    const { docId } = await seedRecord("pending");
+
+    expect(docId).not.toBe(stuck);
+    expect((await readDocumentRecord(UID, stuck))?.status).toBe("uploaded"); // untouched
+    expect(await listUserDocuments(UID)).toHaveLength(2);
   });
 
   it("refuses against a document already in the pipeline (processing / ready)", async () => {
@@ -75,7 +80,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   // different document (an edited revision), and a different file at the same
   // size is a coincidence, not a duplicate.
   it("allows the same name at a different size", async () => {
-    await seedRecord("uploaded", { size: 2048 });
+    await seedRecord("ready", { size: 2048 });
 
     const { docId } = await seedRecord("pending", { size: 4096 });
 
@@ -84,7 +89,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   });
 
   it("allows a different name at the same size", async () => {
-    await seedRecord("uploaded", { file_name: "report.pdf" });
+    await seedRecord("ready", { file_name: "report.pdf" });
 
     const { docId } = await seedRecord("pending", { file_name: "other.pdf" });
 
@@ -96,7 +101,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   // depends on the OS and on which copy the user reached for, so it can't be
   // part of identity.
   it("refuses a name differing only in case", async () => {
-    await seedRecord("uploaded", { file_name: "report.pdf" });
+    await seedRecord("ready", { file_name: "report.pdf" });
 
     for (const attempt of ["Report.pdf", "REPORT.PDF", "rEpOrT.pDf"]) {
       await expect(seedRecord("pending", { file_name: attempt })).rejects.toBeInstanceOf(
@@ -109,7 +114,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   // Case folding must not widen the match beyond case — the size half and the
   // rest of the name still have to agree.
   it("case-insensitivity does not collapse genuinely different names", async () => {
-    await seedRecord("uploaded", { file_name: "report.pdf" });
+    await seedRecord("ready", { file_name: "report.pdf" });
 
     const { docId } = await seedRecord("pending", { file_name: "REPORTS.PDF" });
 
@@ -118,7 +123,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   });
 
   it("case-insensitivity still respects the size half of the key", async () => {
-    await seedRecord("uploaded", { file_name: "report.pdf", size: 2048 });
+    await seedRecord("ready", { file_name: "report.pdf", size: 2048 });
 
     const { docId } = await seedRecord("pending", { file_name: "REPORT.PDF", size: 4096 });
 
@@ -174,7 +179,7 @@ describe("duplicate gate — (file_name, size) identity at the mint seam", () =>
   // same file are not duplicating anything.
   it("never blocks on another user's identical document", async () => {
     authAs("user-b");
-    await seedRecord("uploaded");
+    await seedRecord("ready");
 
     authAs(UID);
     const { docId } = await seedRecord("pending");
@@ -202,7 +207,7 @@ describe("duplicate gate — presign action surface", () => {
   });
 
   it("names the file and its size when the duplicate is an existing document", async () => {
-    await seedRecord("uploaded", { size: 2048 });
+    await seedRecord("ready", { size: 2048 });
 
     const { error } = await getPresignedUrl("report.pdf", "Quarterly report", 2048);
 
@@ -219,7 +224,7 @@ describe("duplicate gate — presign action surface", () => {
   });
 
   it("refuses a duplicate that differs only in case, and says which name it clashes with", async () => {
-    await seedRecord("uploaded", { file_name: "report.pdf", size: 2048 });
+    await seedRecord("ready", { file_name: "report.pdf", size: 2048 });
 
     const { url, error } = await getPresignedUrl("Report.PDF", "Quarterly report", 2048);
 

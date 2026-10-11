@@ -82,7 +82,7 @@ def run_ingest_job(envelope: dict) -> str:
 
     # Good file: chunk the parsed text (document-level — mark_failed on error).
     try:
-        chunks = chunk_markdown(text, doc_id=doc_id)
+        chunks = chunk_markdown(text, source=doc_id)
     except (ValueError, TypeError) as exc:
         log.warning("chunking failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)
