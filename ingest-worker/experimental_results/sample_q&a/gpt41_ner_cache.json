@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "persons": [
+      "sundar pichai"
+    ],
+    "orgs": [
+      "alphabet inc.",
+      "google",
+      "waymo",
+      "nasdaq",
+      "sec"
+    ],
+    "locations": [
+      "mountain view, calif.",
+      "united states",
+      "emea",
+      "apac",
+      "other americas"
+    ],
+    "dates": [
+      "april 29, 2026",
+      "march 31, 2026",
+      "june 15, 2026",
+      "june 8, 2026",
+      "december 31, 2025",
+      "march 31, 2025",
+      "march 31, 2024"
+    ],
+    "products": [
+      "google search",
+      "youtube",
+      "google cloud platform (gcp)",
+      "gemini app",
+      "youtube tv",
+      "youtube music",
+      "youtube premium",
+      "nfl sunday ticket",
+      "google one",
+      "google workspace"
+    ],
+    "concepts": [
+      "ai",
+      "enterprise ai solutions",
+      "enterprise ai infrastructure",
+      "google cloud platform services",
+      "communication and collaboration tools",
+      "autonomous transportation services",
+      "internet services",
+      "non-gaap financial measures",
+      "free cash flow",
+      "constant currency revenues",
+      "percentage change in constant currency revenues",
+      "operating income",
+      "operating margin",
+      "traffic acquisition costs (tac)",
+      "stock-based compensation expense",
+      "deferred income taxes",
+      "hedging gains (losses)",
+      "equity securities",
+      "debt securities",
+      "income taxes",
+      "net income",
+      "diluted net income per share",
+      "dividend",
+      "senior unsecured notes",
+      "forward-looking statements",
+      "gaap",
+      "non-gaap",
+      "financial statements",
+      "capital expenditures",
+      "stockholders\u2019 equity",
+      "operating lease assets",
+      "goodwill",
+      "intangible assets",
+      "accrued compensation and benefits",
+      "accrued expenses",
+      "deferred revenue",
+      "long-term debt",
+      "operating lease liabilities",
+      "income from operations",
+      "research and development",
+      "sales and marketing",
+      "general and administrative",
+      "cost of revenues",
+      "net cash provided by operating activities",
+      "net cash used in investing activities",
+      "net cash provided by (used in) financing activities"
+    ]
+  },
+  "contacts": [
+    "press@abc.xyz",
+    "investor-relations@abc.xyz"
+  ]
+}

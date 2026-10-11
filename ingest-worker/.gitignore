@@ -2,5 +2,20 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-experimental_results/
+
+# Ignore experimental_results/ except the testing inputs/Q&A we keep
+experimental_results/*
+!experimental_results/source_files/
+!experimental_results/sample_q&a/
+
+# HuggingFace dataset-download cache (multi-GB raw zips, reproducible)
+experimental_results/source_files/uda_qa_cache/hf/
+
 chunk-output/
+user_chunks.json
+
+# Scratch test scripts in mytests/ — only these three are tracked
+src/ingest/mytests/*
+!src/ingest/mytests/test_reranker.py
+!src/ingest/mytests/test_uda_consistency.py
+!src/ingest/mytests/test_uda_eval.py

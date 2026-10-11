@@ -1,0 +1,330 @@
+Class 3
+CS 202
+29 January 2024
+
+On the board
+------------
+
+1. Last time
+2. Stack frames, continued
+3. System calls
+4. Process/OS control transfers
+5. Git/lab setup
+6. Process birth
+7. Shell: motivation
+
+---------------------------------------------------------------------------
+
+1. Last time
+    
+    - intro to processes
+    - process's view of memory (and registers)
+    - stack frames
+
+2. Stack frames, continued
+
+    abstract picture:
+
+
+                            |
+                            |
+                            |
+	   +------------+   |
+	   | ret %rip   |   /
+	   +============+
+    %rbp-> | saved %rbp |   \
+	   +------------+   |
+	   |            |   |
+	   |   local    |   \
+	   | variables, |    >- current function's stack frame
+	   |  call-     |   /
+	   | preserved  |  / 
+	   |   regs,    | |
+	   | etc.       |/
+    %rsp-> +------------+   
+
+
+    Notice: right after g() returns to f(), the frame pointer is in the right place
+    for f. How???
+    
+    This is the purpose of the prologue/epilogue in g(). The
+    prologue/epilogue are inverse operations (save old frame pointer,
+    restore old one). So the result is that from the perspective of f:
+    after g returns, _the frame pointer hasn't moved_ (even though of
+    course it did). While the frame pointer has a special role in
+    compiled code, this aspect of the frame pointer -- a called function
+    saves the old value at the beginning of the function and restores
+    that old value at the end -- is shared with other registers, known
+    as _call-preserved_ registers. (Also known as "callee-saved").
+
+
+    Calling conventions
+
+    - x86-64: arguments are passed in registers: %rdi, %rsi, %rdx, %rcx
+
+    - the return value is in register %rax
+
+    - call-preserved (aka "callee-save"): %rbx, %rbp, %r12-%r15
+
+    - call-clobbered (aka "caller-save"): everything else
+
+    NOTE: the notes from last time have an example of the caller saving
+    registers.
+
+    The bug.
+
+    [DEMO]
+
+
+3. System calls
+
+    - System calls are the process's main interface to the operating
+    system 
+        
+        The set of system calls is the API exposed by the kernel to user
+        programs
+
+        In other words, **syscalls are the mechanism by which user-level
+        programs ask the operating system to do things for them.**
+
+    - To the C programmer, a system call looks exactly like a function
+    call: you just issue the function, get a return value, and keep
+    going.
+
+        - here are some example system calls:
+
+	        int fd = open(const char* path, int flags)
+	        write(fd, const void *, size_t)
+	        read(fd, void *, size_t)
+
+	    (Aside: fd is a *file descriptor*. This is an abstraction,
+	    provided by the operating system, that represents an open
+	    file. We'll come back to this later in the course.)
+
+        - lots more:
+
+            - you will work with a few system calls in lab2: stat(), readdir().
+
+            - you will also work with some system calls in the concurrency lab
+
+            - on Unix, type "man 2 <syscall>" to get documentation.
+
+4. Process/OS control transfers
+
+    - To the C compiler (or the assembly programmer) and the machine as
+    a whole, a system call has some key differences versus function
+    calls (even though both are transfers of control):
+    
+	(i) there is a small difference in calling conventions -- a
+	process knows that when it invokes "syscall", ALL registers
+	(except RAX) are call-preserved. That means that the callee (in
+	this case the kernel) is required to save and restore all
+	registers (except RAX, because that is where return values go).
+     
+        (ii) Rather than using the "call" instruction, the process uses
+        a different instruction (helpfully called the `syscall`
+        instruction). This causes privilege levels to switch.
+
+        The picture looks like this:
+
+              user-level application
+		     |   (open)
+		     v            user-level
+	    ---------------------------                ^
+		    |             kernel-level         |
+		    |____>  [table]     open()         |
+				           .....       |
+				        iret  ---------
+
+    - Vocabulary: when a user-level program invokes the kernel via a
+    syscall, it is called *trapping* to the kernel
+
+   
+    Key distinction: privileged versus unprivileged mode
+
+        --the difference between these modes is something that the
+        *hardware* understands and enforces
+
+        --the OS runs in privileged mode
+
+	    --can mess with the hardware configuration 
+
+        --users' tasks run in unprivileged mode
+
+	    --cannot mess with the hardware configuration
+
+        --the hardware knows the difference between privileged and
+        unprivileged mode (on the x86, these are called ring 0 and ring
+        3.  The middle rings aren't used in the classical setup, but
+        they are used in some approaches to virtualization.)
+
+
+    - Overall, there are three ways that the OS (also known as the
+    kernel) is invoked:
+
+        A. system calls, covered above.
+
+        B. interrupts.
+    
+            An _interrupt_ is a hardware event; it allows a device,
+            whether peripheral (like a disk) or built-in (like a timer)
+            to notify the kernel that it needs attention. 
+
+                (As we will see later, timers are essential for
+                ensuring that processes don't hog the CPU.)
+       
+            Interrupts are **implicit**: in most cases, the application
+            that was running at the time of the interrupt _has no idea
+            that an interrupt even triggered_, despite the fact that
+            handling the interrupt requires these high-level steps:
+                - process stops running
+                - CPU invokes interrupt handler
+                - interrupt handler is part of kernel code, so kernel
+                starts running
+                - kernel handles interrupt
+                - kernel returns control
+
+            In other words, from the process's viewpoint, it executed
+            continuously, but an omniscient observer would know
+            perfectly well that the process was in fact _interrupted_
+            (hence the term).
+
+            In order to preserve this illusion, the processor (CPU) and
+            kernel have to be designed very carefully to save _all_
+            process state on an interrupt, and restore all of it.
+            
+            We will discuss the underlying mechanisms for these control
+            transfers later in the course.
+
+        C. exceptions
+
+            An _exception_ means that the CPU cannot execute the
+            instruction issued by the process.
+
+            Classically (and for this part of the course), you can think
+            of this as "the process did something erroneous" (a software
+            bug): dividing by 0, accessing a bogus memory address, or
+            attempting to execute an unknown instruction. But there are
+            non-erroneous causes of exceptions (an example is demand
+            paging, as we will see in the virtual memory unit).
+
+            When an exception happens, the processor (the CPU) knows
+            about it immediately. The CPU then invokes an 
+            _exception handler_ (code implemented by the kernel).
+            The kernel can handle exceptions in a variety of ways:
+
+            - kill the process (this is the default, and what is
+            happening when you see a segfault in one of your programs).
+            
+            - signal to your process (this is how runtimes like Java
+            generate null-pointer exceptions; processes _register_ to
+            catch signals).
+            
+            - silently handle the exception (this is how the kernel
+            handles certain memory exceptions, as in the demand paging
+            case).
+            
+            The mechanisms here relate to those for interrupts.
+
+5. Git/lab setup
+
+    [draw a picture]
+
+    fork remote labs (on classroom)
+        [different use of the word fork from later in this class]
+
+    git on your local machine
+
+        - your origin: that fork, called labs-24sp-<username>
+        - your upstream: our "labs"
+
+    Docker
+        - gives us a (more or less) uniform Linux environment
+        - user-level programs think they are running on Linux
+
+    x86 computers compiled to x86
+
+    M1 computers compiled to arm64
+
+    Relevance of lab2
+        system calls, Unix programming, navigating file system
+
+6. Process birth
+
+    How does a process come into being?
+
+	--answer: a system call!
+	    
+	--in Unix, it is fork()
+
+	--fork() creates an exact copy (almost; the return value is
+	different).
+
+	--thus, what happens if a system had two important users, and
+	one of them runs a process that executes this code:
+
+	    for (i = 0; i < 10; i++) {
+		fork();
+	    }
+
+	    while (1) {}
+
+	[answer: one of the users gets a LOT more of the CPU than
+	another]
+   
+	    --what behavior do you want?
+
+	    [this actually corresponds to research.... difficult on
+	     Linux-like systems to impose true resource containers.]
+----
+
+Shell, motivation
+
+    or say we wanted to extract all of your GitHub ids...how would
+    you do that?
+
+    (Using the GitHub API? Nah...)
+
+    download html from https://github.com/nyu-cs202
+    then
+    $ cat blob | grep -o labs-24sp-[a-zA-Z0-9\-]* | sort -f | uniq > students.txt
+
+
+7. The shell, part I
+
+    --a program that creates processes
+
+    --the human's interface to the computer
+
+    --GUIs (graphical user interfaces) are another kind of shell.
+
+    A. How does the shell start programs?
+
+	--example: 
+	    $ ls
+
+Aside:
+
+     - Fork bomb at the bash command prompt:
+
+            $ :(){ : | : & }; :
+
+---------------------------------------------------------------------------
+
+--here are some other system calls (these are included in the
+notes so that you know what the basic interface to a Unix-like
+OS looks like):
+
+    --int open(char*, int flags, [, int mode]);
+    --int read(int fd, void*, int nbytes):
+    --int write(int fd, void* buf, int nbytes);
+    --off_t lseek(int fd, off_t pos, int whence)
+    --int close(int fd);
+    --int kill(int pid, int signal)
+    --void exit (int status)
+    --int fork(void)
+    --int waitpid(int pid, int* stat, int opt)
+    --int execve(char* prog, char** argv, char** envp)
+    --int dup2 (int oldfd, int newfd)
+    --int pipe(int fds[2])
+

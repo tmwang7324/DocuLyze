@@ -15,6 +15,10 @@ serviceAccount.json
 !.env.example
 !**/.env.example
 
+# Kubernetes secrets — raw (real values) and sealed output
+kubernetes/doculyze-secrets.raw.yml
+kubernetes/doculyze-sealed-secrets.yml
+
 # Installed dependencies — any depth
 node_modules/
 **/node_modules/
@@ -35,3 +39,12 @@ agents/
 
 # code-explainer HTML output (build artifacts, not source)
 code-explanations/
+mono-server-experiment/
+
+# Note / design-doc markdown files — ignored everywhere except README
+*.md
+!README.md
+!**/README.md
+# ...except converted-markdown test inputs (data, not notes)
+!ingest-worker/experimental_results/source_files/**/*.md
+
