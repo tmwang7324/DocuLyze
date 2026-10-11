@@ -14,8 +14,11 @@ experimental_results/source_files/uda_qa_cache/hf/
 chunk-output/
 user_chunks.json
 
-# Scratch test scripts in mytests/ — only these three are tracked
+# Scratch test scripts in mytests/ — only these are tracked
+# (eval_support holds the Qdrant + metric helpers the eval scripts import)
 src/ingest/mytests/*
+!src/ingest/mytests/eval_support.py
+!src/ingest/mytests/test_hybrid_retrieval.py
 !src/ingest/mytests/test_reranker.py
 !src/ingest/mytests/test_uda_consistency.py
 !src/ingest/mytests/test_uda_eval.py

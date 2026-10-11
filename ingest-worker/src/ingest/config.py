@@ -85,20 +85,32 @@ def embedding_model() -> str:
     return os.environ.get("EMBEDDING_MODEL", "voyage-3.5-lite")
 
 
-def chroma_host() -> str:
-    # In compose this is the internal service name; the default suits a local
-    # `chroma run` outside the network.
-    return os.environ.get("CHROMA_HOST", "127.0.0.1")
+def qdrant_url() -> str:
+    return os.environ["QDRANT_URL"]  # Qdrant Cloud cluster URL; required, fail loudly
 
 
-def chroma_port() -> int:
-    return int(os.environ.get("CHROMA_PORT", "8000"))
+def qdrant_api_key() -> str:
+    return os.environ["QDRANT_API_KEY"]  # required, fail loudly; from DocuLyze/.env (repo root), passed through by docker-compose
+
+
+def embedding_dim() -> int:
+    # Dense vector size of the pinned model (voyage-3.5-lite = 1024).
+    return int(os.environ.get("EMBEDDING_DIM", "1024"))
+
+
+# --- LEGACY (ChromaDB, kept for review, see ADR-0004) ---
+# def chroma_host() -> str:
+#     return os.environ.get("CHROMA_HOST", "127.0.0.1")
+#
+#
+# def chroma_port() -> int:
+#     return int(os.environ.get("CHROMA_PORT", "8000"))
 
 
 def voyage_api_key() -> str | None:
     # Same var the voyageai SDK resolves itself; read it here so the key stays
     # a config concern and never gets hardcoded at a call site.
-    return os.environ.get("VOYAGE_API_KEY")
+    return os.environ.get("VOYAGE_API_KEY")  # from DocuLyze/.env (repo root), passed through by docker-compose
 
 
 def lease_ttl_s() -> int:
@@ -163,8 +175,8 @@ if __name__ == "__main__":
     print(f"PDF_OCR_MIN_CHARS     = {pdf_ocr_min_chars()}")
     print(f"DOCLING_ARTIFACTS     = {docling_artifacts_path() or '(unset — Docling cache)'}")
     print(f"EMBEDDING_MODEL       = {embedding_model()}")
-    print(f"CHROMA_HOST           = {chroma_host()}")
-    print(f"CHROMA_PORT           = {chroma_port()}")
+    print(f"QDRANT_URL            = {os.environ.get('QDRANT_URL') or '(unset)'}")
+    print(f"QDRANT_API_KEY        = {'set' if os.environ.get('QDRANT_API_KEY') else '(unset)'}")
     print(f"VOYAGE_API_KEY        = {'set' if voyage_api_key() else '(unset)'}")
     print(f"INGEST_LEASE_TTL_S    = {lease_ttl_s()}")
     print(f"FIRESTORE_EMULATOR    = {os.environ.get('FIRESTORE_EMULATOR_HOST') or 'REAL'}")

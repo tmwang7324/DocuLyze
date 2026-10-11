@@ -9,6 +9,9 @@
 #
 # Emulator hosts live ONLY here — never in the image or the base compose file.
 services:
+  chromadb:
+    ports:
+      - "8000:8000"
   ingest-worker:
     environment:
       FIRESTORE_EMULATOR_HOST: host.docker.internal:8085

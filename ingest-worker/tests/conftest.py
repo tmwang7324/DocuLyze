@@ -18,6 +18,7 @@ os.environ.setdefault("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8085")
 os.environ.setdefault("STORAGE_EMULATOR_HOST", "http://127.0.0.1:9199")
 os.environ.setdefault("FIREBASE_STORAGE_EMULATOR_HOST", "127.0.0.1:9199")
 os.environ.setdefault("FIREBASE_STORAGE_BUCKET", "doculyze.firebasestorage.app")
+os.environ.setdefault("EMBEDDING_DIM", "8")  # match support.EMBED_DIM for fake_embedder
 os.environ.setdefault("GCLOUD_PROJECT", "doculyze")
 # Same credential the Node harness uses; requests still go to the emulators
 # because the *_EMULATOR_HOST vars above always win.
@@ -44,11 +45,26 @@ def fake_embedder():
 
 
 @pytest.fixture()
-def chroma_client():
-    """In-memory Chroma with an empty `chunks` collection (issue #29)."""
+def fake_sparse_embedder():
     import support
 
-    return support.fresh_chroma_client()
+    return support.fake_sparse_embedder()
+
+
+@pytest.fixture()
+def qdrant_client():
+    """In-memory Qdrant with an empty `chunks` collection (issue #29)."""
+    import support
+
+    return support.fresh_qdrant_client()
+
+
+# --- LEGACY (ChromaDB, kept for review, see ADR-0004) ---
+# @pytest.fixture()
+# def chroma_client():
+#     import support
+#
+#     return support.fresh_chroma_client()
 
 
 @pytest.fixture()

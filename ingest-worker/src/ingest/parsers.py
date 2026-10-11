@@ -56,7 +56,7 @@ def parser_for(content_type: str) -> str:
 class PDFParser(Parser):
     def __init__(self):
         self.docling = False
-    def parse(self, data: bytes) -> str:
+    def parse(self, data: bytes, max_pages: int | None = None) -> str:
         # NOTE: PyMuPDF (pymupdf / pymupdf4llm) is AGPL-licensed. Issue #11: this MUST
         # be flagged (and relicensed/replaced) if my project ever ships commercially.
         # Imports stay inside the function — the sandboxed-child pattern (see module
@@ -72,7 +72,12 @@ class PDFParser(Parser):
         # yet silently no-ops in the container (requirements pin rapidocr 3.x).
         # An environment-dependent, unbudgeted second OCR path inside the 20s
         # fast pass; OCR belongs exclusively to pdf_ocr below (job.py decides).
-        return pymupdf4llm.to_markdown(doc, use_ocr=False)
+        # pages= takes 0-based indices; None = whole doc. Clamp to page_count so a
+        # cap larger than the document doesn't hand pymupdf out-of-range pages.
+        if max_pages is not None and max_pages < 1:
+            raise ValueError(f"max_pages must be >= 1 or None, got {max_pages}")
+        pages = None if max_pages is None else list(range(min(max_pages, doc.page_count)))
+        return pymupdf4llm.to_markdown(doc, use_ocr=False, pages=pages)
 
 
 class PDFOCRParser(Parser):
@@ -251,6 +256,32 @@ class CodeParser(Parser):
             
 #         fenced = "`" *  max(3, (longest + 1))
 #         return f"{fenced}{lang}\n{source}\n{fenced}"
+
+_MEDIABOX_RE = re.compile(
+    rb"/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]"
+)
+
+
+def is_slide_pdf(data: bytes) -> bool:
+    """Detect presentation-format PDFs (Google Slides, PowerPoint exports) by
+    checking whether the majority of pages are landscape (width > height).
+
+    Slide-export PDFs have text scattered across positioned text boxes that
+    pymupdf4llm's layout algorithm often drops or misorients. The OCR path
+    renders each page as an image and captures all visible content.
+
+    Raw-bytes MediaBox scan — no pymupdf import, parent-safe like precheck."""
+    boxes = _MEDIABOX_RE.findall(data)
+    if not boxes:
+        return False
+    landscape = 0
+    for m in boxes:
+        w = float(m[2]) - float(m[0])
+        h = float(m[3]) - float(m[1])
+        if w > h:
+            landscape += 1
+    return landscape > len(boxes) / 2
+
 
 # Markdown "skeleton" characters — whitespace plus the structural markers the
 # fast pdf pass can emit for a page with no real text (page-separator dashes,

@@ -28,13 +28,14 @@ pytestmark = pytest.mark.usefixtures("clean_emulators")
 @pytest.fixture(autouse=True)
 def fake_vector_stack(monkeypatch):
     """#29: the job's vector stack, faked for every test in this module — an
-    in-memory Chroma and a deterministic embedder, so no Chroma server and no
+    in-memory Qdrant and deterministic embedders, so no Qdrant server and no
     Voyage key. Patched with raising=True on purpose: if job.py ever renames or
     drops these imports, the fixture fails loudly instead of silently letting
     the suite reach the real Voyage API."""
-    client = support.fresh_chroma_client()
-    monkeypatch.setattr(job_module, "chroma_client", lambda: client)
+    client = support.fresh_qdrant_client()
+    monkeypatch.setattr(job_module, "qdrant_client", lambda: client)
     monkeypatch.setattr(job_module, "create_embedder", support.fake_embedder)
+    monkeypatch.setattr(job_module, "create_sparse_embedder", support.fake_sparse_embedder)
     yield client
 
 
@@ -287,7 +288,8 @@ def test_good_pdf_ends_at_ready_with_chunks_in_vector_store(fake_vector_stack):
         assert c["metadata"]["embedding_model"]  # the pin is recorded
 
     # Retrievable, not merely written.
-    hits = query_user_chunks(fake_vector_stack, support.fake_embedder(), UID, "hello pdf body")
+    hits = query_user_chunks(
+        fake_vector_stack, support.fake_embedder(), support.fake_sparse_embedder(), UID, "hello pdf body")
     assert hits
     assert hits[0]["content"] in [c["content"] for c in stored]
 
@@ -296,7 +298,7 @@ def test_embed_failure_transitions_to_failed(monkeypatch):
     # #29 acceptance: Voyage being down is a document-level failure (ack + retry
     # later), not a job that silently rests at `processing`. Object retained.
     def broken_embedder():
-        def embed(texts, input_type):
+        def embed(texts, input_type, token_size=None):
             raise RuntimeError("voyage down")
 
         return embed
@@ -336,7 +338,7 @@ def test_verification_error_transitions_to_failed(monkeypatch):
     # failure: document-level failure, ack, retry later. An escaping exception
     # would leave the doc resting at `processing` forever.
     def boom(*a, **k):
-        raise RuntimeError("chroma dropped")
+        raise RuntimeError("qdrant dropped")
 
     monkeypatch.setattr(job_module, "get_user_chunks", boom)
 

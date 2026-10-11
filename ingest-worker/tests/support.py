@@ -4,6 +4,7 @@ Python twin of doculyze/tests/helpers/harness.ts — same reset endpoint, same
 seeding discipline (real emulator metadata, not mocks).
 """
 
+import hashlib
 import io
 import os
 import urllib.request
@@ -18,13 +19,13 @@ def textless_pdf_fixture(text: str = "INVOICE 12345\nTotal due 90234") -> bytes:
     import pymupdf
 
     src = pymupdf.open()
-    page = src.new_page(width=400, height=200)
-    page.insert_textbox(pymupdf.Rect(20, 20, 380, 180), text, fontsize=24)
+    page = src.new_page(width=200, height=400)
+    page.insert_textbox(pymupdf.Rect(20, 20, 180, 380), text, fontsize=24)
     pix = page.get_pixmap(dpi=200)
 
     out = pymupdf.open()
-    dst = out.new_page(width=400, height=200)
-    dst.insert_image(pymupdf.Rect(0, 0, 400, 200), pixmap=pix)
+    dst = out.new_page(width=200, height=400)
+    dst.insert_image(pymupdf.Rect(0, 0, 200, 400), pixmap=pix)
     buf = io.BytesIO()
     out.save(buf)
     data = buf.getvalue()
@@ -39,9 +40,7 @@ def fake_embedder():
     """Deterministic stand-in for the Voyage client (issue #29): same text ->
     same vector. No network, no API key — this is the seam create_embedder exists
     to expose."""
-    import hashlib
-
-    def embed(texts, input_type):
+    def embed(texts, input_type, token_size=None):
         assert input_type in ("document", "query")
         vectors = []
         for text in texts:
@@ -52,23 +51,55 @@ def fake_embedder():
     return embed
 
 
-def fresh_chroma_client():
-    """An in-memory Chroma client whose `chunks` collection starts EMPTY.
+def fake_sparse_embedder():
+    """Deterministic stand-in for fastembed BM25: tokens hash to small fixed
+    indices, weight = term count. No model download."""
+    from qdrant_client.models import SparseVector
 
-    chromadb caches one system per identifier, so repeated EphemeralClient()
-    calls share storage — dropping the collection is what actually makes a
-    test's state fresh.
-    """
-    import chromadb
+    def embed(texts, input_type="document"):
+        assert input_type in ("document", "query")
+        out = []
+        for text in texts:
+            counts: dict[int, float] = {}
+            for tok in text.lower().split():
+                idx = int.from_bytes(hashlib.sha256(tok.encode()).digest()[:2], "big")
+                counts[idx] = counts.get(idx, 0.0) + 1.0
+            out.append(SparseVector(indices=list(counts), values=list(counts.values())))
+        return out
 
-    from ingest.vector_store import COLLECTION
+    return embed
 
-    client = chromadb.EphemeralClient()
-    try:
-        client.delete_collection(COLLECTION)
-    except Exception:
-        pass  # first use of the session: nothing to drop
+
+def fresh_qdrant_client():
+    """An in-memory Qdrant client with the `chunks` collection created empty."""
+    from qdrant_client import QdrantClient
+
+    from ingest.vector_store import _ensure_collection
+
+    client = QdrantClient(":memory:")
+    _ensure_collection(client)
     return client
+
+
+# --- LEGACY (ChromaDB, kept for review, see ADR-0004) ---
+# def fresh_chroma_client():
+#     """An in-memory Chroma client whose `chunks` collection starts EMPTY.
+#
+#     chromadb caches one system per identifier, so repeated EphemeralClient()
+#     calls share storage — dropping the collection is what actually makes a
+#     test's state fresh.
+#     """
+#     import chromadb
+#
+#     from ingest.vector_store import COLLECTION
+#
+#     client = chromadb.EphemeralClient()
+#     try:
+#         client.delete_collection(COLLECTION)
+#     except Exception:
+#         pass  # first use of the session: nothing to drop
+#     return client
+
 
 
 def reset_firestore() -> None:

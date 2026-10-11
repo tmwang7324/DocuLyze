@@ -73,8 +73,22 @@ def _split_around_tables(text: str) -> list[tuple[str, bool]]:
     last = 0
     for idx, m in enumerate(matches):
         before = text[last:m.start()]
-        halves = before.rsplit('\n\n', 1)
-        prose = halves[0].strip() if len(halves) == 2 else ''
+        if '\n\n' in before:
+            halves = before.rsplit('\n\n', 1)
+        else:
+            # No blank lines: MarkdownHeaderTextSplitter strips them from its output,
+            # so paragraphs can't be found. Caption = the last line, plus a heading
+            # line ('#' or a bold '**' title) if one sits in the two lines above it,
+            # so a table keeps its title without swallowing all the prose since the
+            # previous table.
+            lines = before.rstrip('\n').split('\n')
+            start = len(lines) - 1
+            for j in range(max(len(lines) - 3, 0), len(lines) - 1):
+                if lines[j].lstrip().startswith(('#', '**')):
+                    start = j
+                    break
+            halves = ['\n'.join(lines[:start]), '\n'.join(lines[start:])] if start > 0 else ['\n'.join(lines)]
+        prose =halves[0].strip() if len(halves) == 2 else ''
         caption = (halves[-1] if len(halves) == 2 else halves[0]).strip()
         if prose:
             parts.append((prose, False))
@@ -88,7 +102,12 @@ def _split_around_tables(text: str) -> list[tuple[str, bool]]:
         if stripped_gap:
             first_para = stripped_gap.split('\n\n', 1)[0]
             first_stripped = first_para.strip()
-            if first_stripped and '\n' not in first_stripped and not first_stripped.startswith('|') and not first_stripped.startswith('>'):
+            # A lone line sitting between two tables is the next table's caption,
+            # not this one's; headings and ':' lead-ins also introduce what follows.
+            is_next_caption = (
+                idx + 1 < len(matches) and not stripped_gap[len(first_para):].strip()
+            ) or first_stripped.startswith('#') or first_stripped.endswith(':')
+            if first_stripped and '\n' not in first_stripped and not first_stripped.startswith('|') and not first_stripped.startswith('>') and not is_next_caption:
                 below_caption = first_stripped
                 end += leading + len(first_para)
 
@@ -107,7 +126,8 @@ def chunk_markdown(
         markdown_text: str,
         max_tokens: int = 1024,
         min_tokens: int = 64,
-        chunk_overlap: int = 32,
+        chunk_overlap: int = 64,
+        source: str = ""
 ) -> list[Chunk]:
     tokenizer = tiktoken.get_encoding("cl100k_base")
     text = markdown_text.replace("<!-- page_break -->", "\n\n")
@@ -140,17 +160,17 @@ def chunk_markdown(
             for segment, is_table in _split_around_tables(content):
                 seg_tokens = len(tokenizer.encode(segment))
                 if is_table or seg_tokens <= max_tokens:
-                    chunks.append(Chunk(segment, s.metadata, i, ""))
+                    chunks.append(Chunk(segment, s.metadata, i, source))
                 else:
                     for sub in text_splitter.create_documents(
                         [segment], metadatas=[s.metadata]):
-                        chunks.append(Chunk(sub.page_content, s.metadata, i, ""))
+                        chunks.append(Chunk(sub.page_content, s.metadata, i, source))
         elif token_count > max_tokens:
             for sub in text_splitter.create_documents(
                 [content], metadatas=[s.metadata]):
-                chunks.append(Chunk(sub.page_content, s.metadata, i, ""))
+                chunks.append(Chunk(sub.page_content, s.metadata, i, source))
         else:
-            chunks.append(Chunk(content, s.metadata, i, ""))
+            chunks.append(Chunk(content, s.metadata, i, source))
         i += 1
 
     chunks = merged_chunks(chunks, max_tokens, min_tokens)

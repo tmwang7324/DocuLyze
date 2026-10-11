@@ -24,6 +24,10 @@ let channelPromise: Promise<amqp.ConfirmChannel> | null = null;
 const channelIds = new WeakMap<amqp.ConfirmChannel, string>();
 let nextChannelId = 1;
 
+
+// assigns locally produced channel ids to the channelIds object,
+// and returns the id for the given channel. 
+// The id is stable for the lifetime of the channel object.
 function channelId(channel: amqp.ConfirmChannel): string {
   let id = channelIds.get(channel);
   if (!id) {

@@ -18,13 +18,13 @@ from pathlib import Path
 
 from ingest.chunker import chunk_markdown
 from ingest.config import chunk_output_dir, firestore_client, storage_bucket
-from ingest.embedding import create_embedder
+from ingest.embedding import create_embedder, create_sparse_embedder
 from ingest.firestore_status import Claim, claim_for_processing, mark_failed, mark_ready
-from ingest.parsers import needs_ocr_fallback, parser_for
+from ingest.parsers import is_slide_pdf, needs_ocr_fallback, parser_for
 from ingest.paths import document_storage_path
 from ingest.precheck import precheck
 from ingest.sandbox import ParseError, run_parser_sandboxed
-from ingest.vector_store import chroma_client, get_user_chunks, write_user_chunks
+from ingest.vector_store import get_user_chunks, qdrant_client, write_user_chunks
 
 log = logging.getLogger("ingest")
 current_dir = Path(__file__).resolve().parent
@@ -56,18 +56,25 @@ def run_ingest_job(envelope: dict) -> str:
 
     parser_name = parser_for(content_type)
     try:
-        text = run_parser_sandboxed(parser_name, data)
-        if parser_name == "pdf" and needs_ocr_fallback(text):
-            # #18: text-less PDF (Print-to-PDF vector glyphs / scanned pages) —
-            # a SECOND sandbox pass through Docling+RapidOCR under the OCR
-            # budget. Normal PDFs never reach this line, so the common case
-            # keeps the tight 20s guard and never imports docling.
-            log.info("pdf text pass near-empty for %s/%s; running OCR fallback", uid, doc_id)
+        if parser_name == "pdf" and is_slide_pdf(data):
+            # Slide-export PDFs (Google Slides, PowerPoint) — pymupdf4llm drops
+            # content from scattered text boxes in presentation layouts. Route
+            # directly to Docling+RapidOCR which renders pages as images.
+            log.info("slide-format PDF detected for %s/%s; routing to OCR", uid, doc_id)
             text = run_parser_sandboxed("pdf_ocr", data)
             if needs_ocr_fallback(text):
-                # Even OCR found nothing embeddable — that is a document-level
-                # failure, not a false success ending at `processing`.
-                raise ParseError("OCR fallback recovered no embeddable text")
+                raise ParseError("OCR recovered no embeddable text from slide PDF")
+        else:
+            text = run_parser_sandboxed(parser_name, data)
+            if parser_name == "pdf" and needs_ocr_fallback(text):
+                # #18: text-less PDF (Print-to-PDF vector glyphs / scanned pages) —
+                # a SECOND sandbox pass through Docling+RapidOCR under the OCR
+                # budget. Normal PDFs never reach this line, so the common case
+                # keeps the tight 20s guard and never imports docling.
+                log.info("pdf text pass near-empty for %s/%s; running OCR fallback", uid, doc_id)
+                text = run_parser_sandboxed("pdf_ocr", data)
+                if needs_ocr_fallback(text):
+                    raise ParseError("OCR fallback recovered no embeddable text")
     except ParseError as exc:
         log.warning("parse failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)  # object retained
@@ -75,7 +82,7 @@ def run_ingest_job(envelope: dict) -> str:
 
     # Good file: chunk the parsed text (document-level — mark_failed on error).
     try:
-        chunks = chunk_markdown(text)
+        chunks = chunk_markdown(text, doc_id=doc_id)
     except (ValueError, TypeError) as exc:
         log.warning("chunking failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)
@@ -108,14 +115,25 @@ def run_ingest_job(envelope: dict) -> str:
     # routes dependency outages to the DLQ instead of `failed` — revisit if
     # outage-vs-bad-document is ever split. Chunking's guard above stays narrow.
     try:
-        write_user_chunks(chroma_client(), create_embedder(), uid, doc_id, chunks)
+        write_user_chunks(
+            qdrant_client(), create_embedder(), create_sparse_embedder(), uid, doc_id, chunks
+        )
     except Exception as exc:
-        log.warning("chunk write failed for %s/%s: %s, sending to DLQ", uid, doc_id, exc)
+        log.warning("chunk write failed for %s/%s: %s", uid, doc_id, exc)
+        mark_failed(db, uid, doc_id)
+        return "skipped"
 
-    if not get_user_chunks(chroma_client(), uid, doc_id):
-        log.warning("chunk verification empty for %s/%s, sending to DLQ", uid, doc_id)
-        
+    try:
+        stored = get_user_chunks(qdrant_client(), uid, doc_id)
+    except Exception as exc:
+        log.warning("chunk verification failed for %s/%s: %s", uid, doc_id, exc)
+        mark_failed(db, uid, doc_id)
+        return "skipped"
+
+    if not stored:
+        log.warning("chunk verification empty for %s/%s", uid, doc_id)
+        mark_failed(db, uid, doc_id)
+        return "skipped"
 
     mark_ready(db, uid, doc_id)
-    snap = None
     return "finished"

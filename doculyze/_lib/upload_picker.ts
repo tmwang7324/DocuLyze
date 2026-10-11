@@ -1,17 +1,3 @@
-// What the upload screen offers the user, derived from what the server accepts.
-// (issue #25)
-//
-// Neutral module — no "use client" / "server-only" — for the same reason
-// _lib/fileupload_schema.ts is: it sits between a client component and the rules
-// a server action enforces, and the whole point is that the two can't drift.
-//
-// It is presentation, never a gate. Nothing here decides what may be uploaded;
-// that is fileSchema / uploadClaimSchema. The picker filter is a convenience for
-// the OS file dialog, and a wrong one is invisible — the user just sees their
-// file greyed out and concludes the format is unsupported. Which is what
-// happened: the dropzone hard-coded ".pdf,.docx" plus two MIME types while the
-// allowlist accepted eleven extensions. Pinned by tests/upload/picker.test.ts.
-
 import { ACCEPTED_EXTENSIONS, MAX_FILE_SIZE, formatBytes } from "@/_lib/fileupload_schema";
 
 /**

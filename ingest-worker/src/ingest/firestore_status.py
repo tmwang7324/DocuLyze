@@ -70,3 +70,30 @@ def mark_failed(db, uid: str, doc_id: str) -> None:
 def mark_ready(db, uid: str, doc_id: str) -> None:
     """processing -> ready. Called only after chunks are persisted and verified."""
     _doc_ref(db, uid, doc_id).update({"status": "ready"})
+
+
+def _chunks_ref(db, uid: str, doc_id: str):
+    return _doc_ref(db, uid, doc_id).collection("chunks")
+
+
+def persist_chunks(db, uid: str, doc_id: str, chunks) -> None:
+    """Write chunks to Firestore subcollection, replacing any existing chunks."""
+    coll = _chunks_ref(db, uid, doc_id)
+    for old in coll.stream(): # 
+        old.reference.delete()
+    batch = db.batch()
+    for idx, chunk in enumerate(chunks):
+        ref = coll.document(str(idx))
+        batch.set(ref, {
+            "chunk_index": idx,
+            "content": chunk.content,
+            "metadata": chunk.metadata,
+            "token_count": chunk.tokens,
+        })
+    batch.commit()
+
+
+def verify_chunks(db, uid: str, doc_id: str) -> bool:
+    """Return True if at least one chunk document exists for the document."""
+    docs = _chunks_ref(db, uid, doc_id).limit(1).get()
+    return len(docs) > 0

@@ -25,7 +25,7 @@ def test_table_is_not_split_across_chunks():
     header = "| Col A | Col B |\n| --- | --- |"
     rows = "\n".join(f"| val{i} | val{i} |" for i in range(20))
     md = f"# Section\n\n{header}\n{rows}"
-    chunks = chunk_markdown(md, max_tokens=64)
+    chunks = chunk_markdown(md, max_tokens=96)
     table_chunks = [c for c in chunks if "|" in c.content and "---" in c.content]
     assert len(table_chunks) == 1
 

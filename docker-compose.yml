@@ -23,7 +23,7 @@ services:
       IS_PERSISTENT: "TRUE"
       PERSIST_DIRECTORY: /data
     volumes:
-      - chroma-data:/data
+      - chroma-data:/data 
     networks: [ingest]      # no `ports:` — internal only
     # No healthcheck: the image ships no curl/wget/shell to probe
     # /api/v2/heartbeat with, so dependents wait on service_started.
@@ -38,6 +38,8 @@ services:
       CHUNK_OUTPUT_DIR: /data/chunks
       CHROMA_HOST: chromadb
       CHROMA_PORT: "8000"
+      QDRANT_URL: ${QDRANT_URL:-}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
       # The embedding pin — changing it is a full re-embed migration.
       EMBEDDING_MODEL: voyage-3.5-lite
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}

@@ -31,7 +31,7 @@ COLLECTION_NAME = "uda_eval_chunks"
 NOISE_DOCS_PER_SIGNAL_DOC = 0.5  # noise docs = ceil(signal docs * this), per subdataset
 EMBED_BATCH_SIZE = 50  # chunks per Voyage API call
 # A fixed tenant id for the eval corpus — not a real DocuLyze user, just the
-# userId partition the Chroma tenant-gateway metadata convention expects.
+# userId partition the tenant-gateway payload convention expects.
 UDA_UID = "uda-eval"
 
 # Naming convention inside each HF UDA-QA zip archive (source_id: dataset:doc_name).
@@ -114,14 +114,13 @@ def _read_qa_rows(dataset_key: str) -> list[dict]:
     return pd.read_parquet(cached).to_dict(orient="records")
 
 
-def _first(row: dict, *keys: str):
+def _first(row: dict, *keys: str, default=""):
     for key in keys:
         value = row.get(key)
         if value is not None and not (isinstance(value, float) and math.isnan(value)):
             if str(value).strip():
                 return value
-    return ""
-
+    return default
 
 def _json_value(value):
     if hasattr(value, "tolist"):
@@ -343,7 +342,7 @@ def step_download():
 
 # ===================================================================
 # Ingest (ticket #02): download source PDFs, parse, chunk (phases 1-3),
-# then embed + write to ChromaDB + noise padding (phases 4-5).
+# then embed + write to Qdrant + noise padding (phases 4-5).
 # ===================================================================
 def _load_source_documents() -> list[dict]:
     if not QUESTIONS_PATH.exists():
@@ -470,7 +469,7 @@ def step_ingest():
 
     This is a deliberate PAUSE POINT before any paid Voyage API calls — it
     only downloads/parses/chunks and prints what step_embed would send to
-    ChromaDB, so the corpus scope can be reviewed first.
+    Qdrant, so the corpus scope can be reviewed first.
     """
     sources = _load_source_documents()
     print(f"Source documents referenced by sampled questions: {len(sources)}")
@@ -502,13 +501,13 @@ def step_ingest():
     print("Chunks per subdataset:")
     for dataset, count in sorted(by_dataset.items()):
         print(f"  {dataset}: {count}")
-    print(f"\nNext: run --step embed to embed signal chunks, write to ChromaDB "
+    print(f"\nNext: run --step embed to embed signal chunks, write to Qdrant "
           f"collection '{COLLECTION_NAME}', and pad with noise documents "
           f"(noise docs = ceil(signal docs * {NOISE_DOCS_PER_SIGNAL_DOC}) per subdataset).")
 
 
 # ===================================================================
-# Embed (ticket #02, phases 4-5): embed + ChromaDB write + noise padding.
+# Embed (ticket #02, phases 4-5): embed + Qdrant write + noise padding.
 # ===================================================================
 def _list_zip_pdf_docnames(zip_path: Path, archive: str) -> list[str]:
     """All PDF doc_names present in a zip archive, under its known PDF prefix."""
@@ -523,51 +522,41 @@ def _list_zip_pdf_docnames(zip_path: Path, archive: str) -> list[str]:
     return names
 
 
-def _embed_and_write_chunks(collection, embed_fn, dataset: str, source_id: str, chunks: list) -> int:
-    """Embed a document's chunks in batches of EMBED_BATCH_SIZE and add them
-    to the Chroma collection. Returns the number of chunks actually written."""
-    from ingest.config import embedding_model
+def _embed_and_write_chunks(client, dense_fn, sparse_fn, dataset: str, source_id: str, chunks: list) -> int:
+    """Embed a document's chunks (dense + sparse) in batches of EMBED_BATCH_SIZE
+    and upsert them to the Qdrant collection. Returns the number of chunks actually written."""
+    from ingest.mytests.eval_support import upsert_chunks
 
-    model = embedding_model()
     written = 0
     for batch_start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[batch_start:batch_start + EMBED_BATCH_SIZE]
         contents = [c.content for c in batch]
         token_sizes = [c.tokens for c in batch]
         try:
-            embeddings = embed_fn(contents, token_size=token_sizes, input_type="document")
+            dense = dense_fn(contents, token_size=token_sizes, input_type="document")
+            sparse = sparse_fn(contents, input_type="document")
         except Exception as exc:
             print(f"  WARNING: embedding call failed for {source_id} batch @ {batch_start}: {exc}")
             continue
-        if not embeddings:
+        if not dense:
             print(f"  WARNING: embedding batch skipped (empty result) for {source_id} @ {batch_start}")
             continue
 
-        ids = []
-        metadatas = []
-        for offset, chunk in enumerate(batch):
-            idx = batch_start + offset
-            ids.append(f"{source_id}/{idx}")
-            metadatas.append({
-                "userId": UDA_UID,
-                "docId": source_id,
-                "chunk_index": idx,
-                "token_count": chunk.tokens,
-                "embedding_model": model,
-                "breadcrumb": chunk.breadcrumb(),
-                "dataset": dataset,
-            })
-        collection.add(ids=ids, embeddings=embeddings, documents=contents, metadatas=metadatas)
-        written += len(batch)
+        written += upsert_chunks(
+            client, COLLECTION_NAME, UDA_UID, source_id, batch, dense, sparse,
+            start_index=batch_start, extra_payload={"dataset": dataset},
+        )
     return written
 
 
 def step_embed():
-    """Phases 4-5: embed signal chunks + noise-padding documents, write to ChromaDB."""
-    import chromadb
-    import voyageai
-
-    from ingest.mytests.test_hybrid_retrieval import VOYAGE_API_KEY, create_embed_fn
+    """Phases 4-5: embed signal chunks + noise-padding documents, write to Qdrant."""
+    from ingest.mytests.eval_support import (
+        connect,
+        create_dense_embedder,
+        create_sparse_embedder,
+        recreate_collection,
+    )
 
     sources = _load_source_documents()
     source_by_id = {s["source_id"]: s for s in sources}
@@ -579,17 +568,10 @@ def step_embed():
         print("No signal documents available to embed (see warnings above) — nothing to do.")
         return
 
-    # Ticket #02 phase 4: separate clients from the shared embed_fn (which
-    # carries its own Voyage client internally via test_hybrid_retrieval).
-    voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
-    chroma_client = chromadb.HttpClient(host="127.0.0.1", port=8000)
-    embed_fn = create_embed_fn()
-
-    try:
-        chroma_client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-    collection = chroma_client.get_or_create_collection(COLLECTION_NAME)
+    client = connect()
+    dense_fn = create_dense_embedder()
+    sparse_fn = create_sparse_embedder()
+    recreate_collection(client, COLLECTION_NAME, keyword_fields=("userId", "docId", "dataset"))
 
     signal_chunks_by_dataset: Counter = Counter()
     signal_docs_by_dataset: Counter = Counter()
@@ -598,7 +580,7 @@ def step_embed():
     print(f"Embedding {len(chunk_map)} signal documents into '{COLLECTION_NAME}'...")
     for source_id, chunks in chunk_map.items():
         dataset = source_by_id.get(source_id, {}).get("dataset", "unknown")
-        written = _embed_and_write_chunks(collection, embed_fn, dataset, source_id, chunks)
+        written = _embed_and_write_chunks(client, dense_fn, sparse_fn, dataset, source_id, chunks)
         signal_chunks_by_dataset[dataset] += written
         if written > 0:
             signal_docs_by_dataset[dataset] += 1
@@ -668,7 +650,7 @@ def step_embed():
                     continue
 
                 written = _embed_and_write_chunks(
-                    collection, embed_fn, dataset, noise_source_id, noise_chunk_map[noise_source_id]
+                    client, dense_fn, sparse_fn, dataset, noise_source_id, noise_chunk_map[noise_source_id]
                 )
                 if written <= 0:
                     continue  # a noise doc that embedded nothing doesn't count
@@ -707,7 +689,7 @@ def _not_implemented(step: str):
 STEPS = {
     "download": step_download,
     "ingest": step_ingest,    # phases 1-3: download PDFs, parse, chunk
-    "embed": step_embed,      # phases 4-5: embed + ChromaDB + noise padding
+    "embed": step_embed,      # phases 4-5: embed + Qdrant + noise padding
     "label": lambda: _not_implemented("label"),
     "eval": lambda: _not_implemented("eval"),
     "report": lambda: _not_implemented("report"),
