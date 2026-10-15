@@ -16,6 +16,7 @@ serviceAccount.json
 !**/.env.example
 
 # Kubernetes secrets — raw (real values) and sealed output
+kubernetes/doculyze-secrets.yml
 kubernetes/doculyze-secrets.raw.yml
 kubernetes/doculyze-sealed-secrets.yml
 

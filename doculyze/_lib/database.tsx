@@ -103,7 +103,8 @@ export const SIGNED_URL_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // user reached for, so it can't be part of identity. No content hash — the bytes
 // never pass through the server (they go straight to Storage), so hashing would
 // mean downloading every candidate.
-//
+//const SETTLED_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["processing", "ready"]);const SETTLED_BLOCKING_STATUSES: ReadonlySet<string> = new Set(["uploaded", "processing", "ready"]);
+
 // Which existing records block a new upload of that pair:
 //   processing / ready — the document is already in the pipeline or the
 //                                   archive. This is the duplicate we exist to prevent.

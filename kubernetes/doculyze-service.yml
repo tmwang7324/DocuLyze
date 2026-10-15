@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: doculyze-service
+  namespace: development
+spec:
+  selector:
+    app: doculyze
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+     # nodePort: 30080
+  type: LoadBalancer

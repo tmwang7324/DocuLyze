@@ -1,0 +1,26 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-worker-deployment
+  namespace: development
+  labels:
+    app: ingest-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingest-worker
+  template:
+    metadata:
+      labels:
+        app: ingest-worker
+    spec:
+      containers:
+        - name: ingest-worker-container
+          image: tmwang7324/doculyze-ingest-worker:v1
+          envFrom:
+            - configMapRef:
+                name: ingest-worker-config
+            - secretRef:
+                name: ingest-worker-secrets

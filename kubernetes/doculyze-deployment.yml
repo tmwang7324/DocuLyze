@@ -1,0 +1,28 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: doculyze-deployment
+  namespace: development
+  labels:
+    app: doculyze
+spec: 
+  replicas: 2
+  selector:
+    matchLabels:
+      app: doculyze
+  template:
+    metadata:
+      labels:
+        app: doculyze
+    spec:
+      containers:
+        - name: doculyze-container
+          image: tmwang7324/doculyze-next-js:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: doculyze-config
+            - secretRef:
+                name: doculyze-secrets
