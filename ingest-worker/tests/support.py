@@ -74,7 +74,7 @@ def fresh_qdrant_client():
     """An in-memory Qdrant client with the `chunks` collection created empty."""
     from qdrant_client import QdrantClient
 
-    from ingest.vector_store import _ensure_collection
+    from retrieval.vector_store import _ensure_collection
 
     client = QdrantClient(":memory:")
     _ensure_collection(client)

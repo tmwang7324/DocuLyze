@@ -81,6 +81,21 @@ describe("createChannel operational lifecycle seam", () => {
 
     await expect(runWithRequestContext(() => createChannel())).resolves.toBe(channel);
 
+    expect(channel.assertExchange).toHaveBeenNthCalledWith(1, "doc.ingest.dlx", "direct", { durable: true });
+    expect(channel.assertQueue).toHaveBeenNthCalledWith(1, "doc.ingest.dead", { durable: true });
+    expect(channel.bindQueue).toHaveBeenNthCalledWith(1, "doc.ingest.dead", "doc.ingest.dlx", "doc.ingest");
+    expect(channel.assertQueue).toHaveBeenNthCalledWith(2, "doc.ingest", {
+      durable: true,
+      arguments: { "x-dead-letter-exchange": "doc.ingest.dlx" },
+    });
+    expect(channel.assertExchange).toHaveBeenNthCalledWith(2, "doc.delete.dlx", "direct", { durable: true });
+    expect(channel.assertQueue).toHaveBeenNthCalledWith(3, "doc.delete.dead", { durable: true });
+    expect(channel.bindQueue).toHaveBeenNthCalledWith(2, "doc.delete.dead", "doc.delete.dlx", "doc.delete");
+    expect(channel.assertQueue).toHaveBeenNthCalledWith(4, "doc.delete", {
+      durable: true,
+      arguments: { "x-dead-letter-exchange": "doc.delete.dlx" },
+    });
+
     expect(transport.events).toEqual([
       expect.objectContaining({ operation: "createChannel", lifecycle: "started", level: "info" }),
       expect.objectContaining({

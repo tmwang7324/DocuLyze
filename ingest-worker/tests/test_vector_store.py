@@ -8,7 +8,12 @@ a deterministic fake and the Qdrant client is in-memory (in-memory, per test).
 import support
 
 from ingest.chunker import Chunk, chunk_markdown
-from ingest.vector_store import get_user_chunks, query_user_chunks, write_user_chunks
+from retrieval.vector_store import (
+    delete_user_chunks,
+    get_user_chunks,
+    query_user_chunks,
+    write_user_chunks,
+)
 
 # `qdrant_client`, `fake_embedder`, `fake_sparse_embedder` are conftest fixtures (support.py).
 
@@ -81,7 +86,64 @@ def test_doc_id_filter_cannot_reach_another_users_document(qdrant_client, fake_e
         "user-b",
         "salary compensation",
         n_results=50,
-        doc_id="doc-a",
+        doc_ids=["doc-a"],
+    )
+
+    assert results == []
+
+
+# --- Slice 2b: multi-document Scope (chat ticket 01) ---
+
+def _write_three_docs(client, embed_fn, sparse_fn):
+    """One user, three documents sharing a keyword, plus another user's doc."""
+    for doc_id, title in (("doc-1", "Recursion"), ("doc-2", "Stacks"), ("doc-3", "Queues")):
+        chunks = chunk_markdown(f"# {title}\n\nLecture notes on {title.lower()} for exam.\n", min_tokens=1)
+        write_user_chunks(client, embed_fn, sparse_fn, "user-s", doc_id, chunks)
+    other = chunk_markdown("# Secret\n\nLecture notes on exam answers.\n", min_tokens=1)
+    write_user_chunks(client, embed_fn, sparse_fn, "user-other", "doc-x", other)
+
+
+def test_scope_returns_only_pinned_documents(qdrant_client, fake_embedder, fake_sparse_embedder):
+    _write_three_docs(qdrant_client, fake_embedder, fake_sparse_embedder)
+
+    results = query_user_chunks(
+        qdrant_client, fake_embedder, fake_sparse_embedder, "user-s", "lecture notes exam",
+        n_results=50, doc_ids=["doc-1", "doc-3"],
+    )
+
+    assert {r["metadata"]["docId"] for r in results} == {"doc-1", "doc-3"}
+
+
+def test_no_scope_searches_all_of_the_users_documents(qdrant_client, fake_embedder, fake_sparse_embedder):
+    _write_three_docs(qdrant_client, fake_embedder, fake_sparse_embedder)
+
+    results = query_user_chunks(
+        qdrant_client, fake_embedder, fake_sparse_embedder, "user-s", "lecture notes exam", n_results=50
+    )
+
+    assert {r["metadata"]["docId"] for r in results} == {"doc-1", "doc-2", "doc-3"}
+
+
+def test_pinning_another_users_document_returns_nothing_from_it(
+    qdrant_client, fake_embedder, fake_sparse_embedder
+):
+    _write_three_docs(qdrant_client, fake_embedder, fake_sparse_embedder)
+
+    results = query_user_chunks(
+        qdrant_client, fake_embedder, fake_sparse_embedder, "user-s", "lecture notes exam",
+        n_results=50, doc_ids=["doc-2", "doc-x"],
+    )
+
+    assert {r["metadata"]["docId"] for r in results} == {"doc-2"}
+
+
+def test_empty_scope_searches_nothing(qdrant_client, fake_embedder, fake_sparse_embedder):
+    # Widening an emptied Scope back to everything is the caller's call, not the gateway's.
+    _write_three_docs(qdrant_client, fake_embedder, fake_sparse_embedder)
+
+    results = query_user_chunks(
+        qdrant_client, fake_embedder, fake_sparse_embedder, "user-s", "lecture notes exam",
+        n_results=50, doc_ids=[],
     )
 
     assert results == []
@@ -96,7 +158,7 @@ def test_stored_chunks_record_the_configured_embedding_model(
     # a literal in vector_store. Changing the model is a re-embed migration,
     # so every row has to say which space it was embedded in.
     monkeypatch.setenv("EMBEDDING_MODEL", "sentinel-embed-v0")
-    from ingest.config import embedding_model
+    from retrieval.config import embedding_model
 
     chunks = chunk_markdown("# Pin\n\nA short paragraph to embed.\n", min_tokens=1)
     write_user_chunks(qdrant_client, fake_embedder, fake_sparse_embedder, "user-pin", "doc-pin", chunks)
@@ -134,6 +196,18 @@ def test_rewriting_a_document_replaces_its_chunks(qdrant_client, fake_embedder, 
     # No duplicates from the re-add, no survivors from the first write.
     assert len(results) == len(second)
     assert {r["content"] for r in results} == {c.content for c in second}
+
+
+def test_delete_removes_only_the_target_users_document(
+    qdrant_client, fake_embedder, fake_sparse_embedder
+):
+    _write_two_tenants(qdrant_client, fake_embedder, fake_sparse_embedder)
+
+    delete_user_chunks(qdrant_client, "user-a", "doc-a")
+    delete_user_chunks(qdrant_client, "user-a", "doc-a")  # replay is harmless
+
+    assert get_user_chunks(qdrant_client, "user-a", "doc-a") == []
+    assert get_user_chunks(qdrant_client, "user-b", "doc-b")
 
 
 # --- Slice 5: embed calls respect the provider's per-request batch cap ---

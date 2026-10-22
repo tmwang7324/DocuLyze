@@ -1,0 +1,11 @@
+# Used by BuildKit for ingest-worker/Dockerfile only (replaces the old
+# ingest-worker/.dockerignore). The context is the repo root, which holds
+# node_modules, venvs and credentials — so allowlist, don't denylist.
+*
+!ingest-worker/requirements.txt
+!ingest-worker/src
+!packages/retrieval
+**/__pycache__
+**/*.pyc
+**/.venv
+**/*.egg-info

@@ -55,21 +55,42 @@ def claim_for_processing(db, uid: str, doc_id: str) -> Claim:
                 tx.update(ref, {"claimedAt": firestore.SERVER_TIMESTAMP})
                 return Claim.RERUN
             return Claim.BUSY
-        if status in ("ready", "failed"):
+        if status in ("ready", "failed", "deleting"):
             return Claim.SKIP
         log.info(f"Document {doc_id} for user {uid} has unexpected status: {status}.")
         return Claim.ABSENT  # "pending" or unknown
 
     return txn(db.transaction())
 
-def mark_failed(db, uid: str, doc_id: str) -> None:
-    """processing -> failed, flag-only. Never touches Storage (bytes retained)."""
-    _doc_ref(db, uid, doc_id).update({"status": "failed"})
+def deletion_requested(db, uid: str, doc_id: str) -> bool:
+    """True once deletion won, including after its worker removes the record."""
+    snap = _doc_ref(db, uid, doc_id).get()
+    return not snap.exists or snap.get("status") == "deleting"
 
 
-def mark_ready(db, uid: str, doc_id: str) -> None:
-    """processing -> ready. Called only after chunks are persisted and verified."""
-    _doc_ref(db, uid, doc_id).update({"status": "ready"})
+def _mark_if_processing(db, uid: str, doc_id: str, status: str) -> bool:
+    """Fence terminal ingest writes against a concurrent deletion request."""
+    ref = _doc_ref(db, uid, doc_id)
+
+    @firestore.transactional
+    def txn(tx) -> bool:
+        snap = ref.get(transaction=tx)
+        if not snap.exists or snap.get("status") != "processing":
+            return False
+        tx.update(ref, {"status": status})
+        return True
+
+    return txn(db.transaction())
+
+
+def mark_failed(db, uid: str, doc_id: str) -> bool:
+    """processing -> failed, unless deletion already owns the record."""
+    return _mark_if_processing(db, uid, doc_id, "failed")
+
+
+def mark_ready(db, uid: str, doc_id: str) -> bool:
+    """processing -> ready, unless deletion already owns the record."""
+    return _mark_if_processing(db, uid, doc_id, "ready")
 
 
 def _chunks_ref(db, uid: str, doc_id: str):

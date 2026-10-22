@@ -7,6 +7,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { getReadPresignedURL, removeDocument } from "@/app/actions/document/delete_document";
 import {
     filterAndSort,
     type ArchiveQuery,
@@ -38,6 +41,40 @@ export default function ArchiveView({
 }) {
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState<Sort>("recent");
+    const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+    const [removingDocId, setRemovingDocId] = useState<string | null>(null);
+    const router = useRouter();
+
+    async function downloadDocument(event: React.MouseEvent<HTMLAnchorElement>, docId: string) {
+        event.preventDefault();
+        if (downloadingDocId) return;
+
+        setDownloadingDocId(docId);
+        try {
+            const url = await getReadPresignedURL(docId);
+            window.location.assign(url);
+        } catch {
+            toast.error("The document could not be downloaded.");
+        } finally {
+            setDownloadingDocId(null);
+        }
+    }
+
+    async function requestRemoval(row: ArchiveRow) {
+        if (removingDocId || row.status === "deleting") return;
+        if (!window.confirm(`Remove “${row.title}”? This cannot be undone.`)) return;
+
+        setRemovingDocId(row.docId);
+        try {
+            await removeDocument(row.docId);
+            toast.success("Document marked for removal.");
+            router.refresh();
+        } catch {
+            toast.error("The document could not be removed.");
+        } finally {
+            setRemovingDocId(null);
+        }
+    }
 
     const visible = useMemo(() => filterAndSort(rows, { query, sort }), [rows, query, sort]);
 
@@ -117,7 +154,7 @@ export default function ArchiveView({
                 <table className="w-full min-w-[720px] text-left border-collapse">
                     <thead>
                         <tr className="border-b border-dark">
-                            {["Document", "Type", "Size", "Status", "Added"].map((heading) => (
+                            {["Document", "Type", "Size", "Status", "Added", "Actions"].map((heading) => (
                                 <th
                                     key={heading}
                                     scope="col"
@@ -132,9 +169,20 @@ export default function ArchiveView({
                         {visible.map((row) => (
                             <tr key={row.docId} className="border-b border-hairline last:border-b-0 hover:bg-off-white transition-colors">
                                 <td className="px-5 py-4">
-                                    <div className="font-display text-lg font-bold uppercase text-dark leading-tight">
-                                        {row.title}
-                                    </div>
+                                    {row.status === "deleting" ? (
+                                        <span className="font-display text-lg font-bold uppercase text-muted leading-tight">
+                                            {row.title}
+                                        </span>
+                                    ) : (
+                                        <a
+                                            href="#"
+                                            onClick={(event) => downloadDocument(event, row.docId)}
+                                            aria-busy={downloadingDocId === row.docId}
+                                            className="font-display text-lg font-bold uppercase text-dark leading-tight underline decoration-1 underline-offset-4 hover:text-orange-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-primary"
+                                        >
+                                            {downloadingDocId === row.docId ? "Preparing download…" : row.title}
+                                        </a>
+                                    )}
                                     <div className="text-muted text-sm mt-0.5">{row.fileName}</div>
                                     {/* The real Firestore id. The prototype showed a
                                         decorative one derived from the row index. */}
@@ -162,6 +210,16 @@ export default function ArchiveView({
                                 <td className="px-5 py-4 font-mono-label text-xs text-muted whitespace-nowrap">
                                     {row.addedLabel}
                                 </td>
+                                <td className="px-5 py-4 whitespace-nowrap">
+                                    <button
+                                        type="button"
+                                        onClick={() => requestRemoval(row)}
+                                        disabled={row.status === "deleting" || removingDocId !== null}
+                                        className="font-mono-label text-[10px] tracking-wider uppercase text-error hover:underline disabled:text-placeholder disabled:no-underline disabled:cursor-not-allowed"
+                                    >
+                                        {row.status === "deleting" || removingDocId === row.docId ? "Removing…" : "Remove"}
+                                    </button>
+                                </td>
                             </tr>
                         ))}
 
@@ -170,7 +228,7 @@ export default function ArchiveView({
                             broken. */}
                         {isEmpty && (
                             <tr>
-                                <td colSpan={5} className="px-5 py-20 text-center">
+                                <td colSpan={6} className="px-5 py-20 text-center">
                                     <div className="font-display text-2xl font-bold uppercase text-dark mb-2">
                                         Nothing here yet
                                     </div>
@@ -190,7 +248,7 @@ export default function ArchiveView({
 
                         {!isEmpty && visible.length === 0 && (
                             <tr>
-                                <td colSpan={5} className="px-5 py-16 text-center">
+                                <td colSpan={6} className="px-5 py-16 text-center">
                                     <p className="text-muted text-sm">
                                         No documents match{" "}
                                         <span className="font-mono-label text-dark">“{query.trim()}”</span>.

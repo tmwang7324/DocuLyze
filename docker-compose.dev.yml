@@ -17,3 +17,12 @@ services:
       FIRESTORE_EMULATOR_HOST: host.docker.internal:8085
     volumes:
       - ./ingest-worker/chunk-output:/data/chunks
+  delete-worker:
+    environment:
+      FIRESTORE_EMULATOR_HOST: host.docker.internal:8085
+  awesome-chat-service:
+    # `npm run dev` runs on the host, so it needs a host port; localhost-only,
+    # and 8001 because chromadb already holds 8000 here.
+    # doculyze/.env: CHAT_SERVICE_URL=http://127.0.0.1:8001
+    ports:
+      - "127.0.0.1:8001:8000"

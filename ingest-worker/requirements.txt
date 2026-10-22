@@ -14,11 +14,11 @@ rapidocr==3.9.2
 onnxruntime==1.20.1
 tiktoken==0.13.0
 langchain-text-splitters==1.1.2
-# Vector store + embeddings (issue #29): the tenant gateway and its embedding
-# client. Full `chromadb`, not `chromadb-client` — the tests run an in-process
-# EphemeralClient, which the thin client package doesn't ship.
+# Vector store + embeddings (issue #29): qdrant-client, fastembed and voyageai are
+# now pinned by the shared retrieval package (packages/retrieval, chat ticket 01),
+# which the Dockerfile installs after this file. Local dev:
+#     pip install -e ../packages/retrieval
 # --- LEGACY (ChromaDB, kept for review, see ADR-0004) ---
+# Full `chromadb`, not `chromadb-client` — the tests ran an in-process
+# EphemeralClient, which the thin client package doesn't ship.
 # chromadb==1.5.9
-qdrant-client==1.19.1
-fastembed==0.8.1
-voyageai==0.5.0

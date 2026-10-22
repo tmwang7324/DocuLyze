@@ -1,6 +1,6 @@
 """Qdrant + metric helpers shared by the eval scripts (test_reranker, test_uda_eval).
 
-Points are stored the way the production gateway (ingest.vector_store) stores
+Points are stored the way the production gateway (retrieval.vector_store) stores
 them, a dense Voyage vector plus a sparse BM25 vector per chunk, so retrieval can
 run dense-only or hybrid (RRF). Unlike the gateway, the collection is a
 parameter: eval corpora must never land in the production "chunks" collection.
@@ -10,7 +10,7 @@ import uuid
 
 from dotenv import load_dotenv
 
-from ingest.config import (
+from retrieval.config import (
     embedding_dim,
     embedding_model,
     qdrant_api_key,
@@ -77,7 +77,7 @@ def create_dense_embedder():
 
 
 def create_sparse_embedder():
-    from ingest.embedding import create_sparse_embedder as production_sparse_embedder
+    from retrieval.embedding import create_sparse_embedder as production_sparse_embedder
 
     return production_sparse_embedder()
 

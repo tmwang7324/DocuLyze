@@ -1,0 +1,23 @@
+[project]
+name = "awesome-chat-service"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "doculyze-retrieval",
+    "fastapi[standard]>=0.159.1",
+    "openai==2.54.0",
+]
+
+[tool.uv.sources]
+doculyze-retrieval = { path = "../packages/retrieval", editable = true }
+
+[tool.pytest.ini_options]
+# The service is flat modules (main, turn, generate, config); tests import them directly.
+pythonpath = [".", "tests"]
+
+[dependency-groups]
+dev = [
+    "pytest==8.4.2",
+]

@@ -13,7 +13,7 @@ import support
 import ingest.job as job_module
 from ingest.config import lease_ttl_s
 from ingest.job import run_ingest_job
-from ingest.vector_store import get_user_chunks, query_user_chunks
+from retrieval.vector_store import get_user_chunks, query_user_chunks
 
 UID = "user-a"
 DOC = "doc-1"
@@ -201,6 +201,14 @@ def test_replay_against_pending_or_missing_is_absent():
     run_ingest_job({"uid": UID, "docId": "no-such-doc"})  # returns cleanly
 
 
+def test_deleting_record_is_skipped_before_storage_read():
+    # No object staged: a fall-through would raise while downloading.
+    support.seed_record(UID, DOC, status="deleting", content_type=PDF, size=3)
+
+    assert run_ingest_job({"uid": UID, "docId": DOC}) == "skipped"
+    assert support.read_status(UID, DOC) == "deleting"
+
+
 # Case 6: processing-lease fencing (issue #12).
 def test_busy_claim_returns_busy_before_any_download_or_parse(db):
     # No object staged: if BUSY fell through to download+parse (the bug the
@@ -325,6 +333,41 @@ def test_rerun_replaces_vector_chunks_idempotent(fake_vector_stack):
 
     assert len(second_chunks) == len(first_chunks)  # replaced, not appended
     assert support.read_status(UID, DOC) == "ready"
+
+
+def test_deletion_before_vector_write_stops_ingest(db, monkeypatch, fake_vector_stack):
+    real_chunk = job_module.chunk_markdown
+
+    def chunk_then_delete(text, source):
+        chunks = real_chunk(text, source=source)
+        _doc_ref(db).update({"status": "deleting"})
+        return chunks
+
+    monkeypatch.setattr(job_module, "chunk_markdown", chunk_then_delete)
+
+    result = run_ingest_job(stage("text/plain", b"plain text body"))
+
+    assert result == "skipped"
+    assert support.read_status(UID, DOC) == "deleting"
+    assert get_user_chunks(fake_vector_stack, UID, DOC) == []
+
+
+def test_deletion_during_vector_write_is_cleaned_by_ingest(
+    db, monkeypatch, fake_vector_stack
+):
+    real_write = job_module.write_user_chunks
+
+    def write_then_delete(*args, **kwargs):
+        real_write(*args, **kwargs)
+        _doc_ref(db).update({"status": "deleting"})
+
+    monkeypatch.setattr(job_module, "write_user_chunks", write_then_delete)
+
+    result = run_ingest_job(stage("text/plain", b"plain text body"))
+
+    assert result == "skipped"
+    assert support.read_status(UID, DOC) == "deleting"
+    assert get_user_chunks(fake_vector_stack, UID, DOC) == []
 
 
 def test_empty_vector_verification_transitions_to_failed(monkeypatch):

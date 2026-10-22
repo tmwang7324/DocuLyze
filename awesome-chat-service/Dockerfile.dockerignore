@@ -1,0 +1,11 @@
+# BuildKit ignore file for awesome-chat-service/Dockerfile. The context is the
+# repo root (node_modules, venvs, credentials) — so allowlist, don't denylist.
+*
+!awesome-chat-service/pyproject.toml
+!awesome-chat-service/uv.lock
+!awesome-chat-service/*.py
+!packages/retrieval
+**/__pycache__
+**/*.pyc
+**/.venv
+**/*.egg-info

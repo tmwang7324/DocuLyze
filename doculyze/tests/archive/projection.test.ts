@@ -45,6 +45,7 @@ describe("projectArchive", () => {
             ["uploaded", "Queued", "busy"],
             ["pending", "Pending", "muted"],
             ["failed", "Failed", "error"],
+            ["deleting", "Removing", "muted"],
         ];
 
         it.each(cases)("maps %s to its own label and tone", (status, label, tone) => {

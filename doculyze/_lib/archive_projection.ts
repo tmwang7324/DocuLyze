@@ -34,6 +34,7 @@ export type ArchiveRow = {
     docId: string;
     title: string;
     fileName: string;
+    status: string;
     type: string;
     typeColor: string;
     /** Formatted for display, e.g. "2.0 KB". */
@@ -99,6 +100,7 @@ const STATUS_DISPLAY: Record<string, { label: string; tone: StatusTone }> = {
     uploaded: { label: "Queued", tone: "busy" },
     pending: { label: "Pending", tone: "muted" },
     failed: { label: "Failed", tone: "error" },
+    deleting: { label: "Removing", tone: "muted" },
 };
 
 // Additive degradation, the same rule app/(protected)/upload/pipeline_progress.tsx
@@ -141,6 +143,7 @@ export function projectArchive(records: ArchiveInput[]): {
             docId: record.docId,
             title: record.title,
             fileName: record.file_name,
+            status: record.status,
             type,
             typeColor,
             size: formatBytes(record.size),

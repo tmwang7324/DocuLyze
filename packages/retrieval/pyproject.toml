@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doculyze-retrieval"
+version = "0.1.0"
+description = "DocuLyze shared retrieval: Qdrant tenant gateway + Voyage/BM25 embedders"
+requires-python = ">=3.11"
+
+# Only the vector-store and embedding clients — no parser or broker deps, so the
+# chat service image stays small. Pinned here (not in either service's
+# requirements) because the write side and query side must run the same
+# versions; moved from ingest-worker/requirements.txt with their pins unchanged.
+dependencies = [
+    "qdrant-client==1.19.1",
+    "fastembed==0.8.1",
+    "voyageai==0.5.0",
+]
+
+# Local dev, from either service directory:
+#     pip install -e ../packages/retrieval
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["retrieval*"]

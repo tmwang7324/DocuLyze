@@ -28,7 +28,7 @@ from openai import OpenAI
 from langchain_openai import ChatOpenAI
 
 from ingest.chunker import chunk_markdown
-from ingest.config import embedding_model
+from retrieval.config import embedding_model
 from pydantic import BaseModel
 from dotenv import load_dotenv
 # ---------------------------------------------------------------------------

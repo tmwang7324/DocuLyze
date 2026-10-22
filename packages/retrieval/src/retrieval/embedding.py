@@ -13,9 +13,9 @@ embedding a single short string, don't need it).
 
 import logging
 
-from ingest.config import embedding_model, voyage_api_key
+from retrieval.config import embedding_model, voyage_api_key
 
-log = logging.getLogger("ingest")
+log = logging.getLogger("retrieval")
 
 
 def create_embedder_voyage():

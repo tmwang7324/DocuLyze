@@ -1,0 +1,8 @@
+*
+!delete-worker/requirements.txt
+!delete-worker/src
+!packages/retrieval
+**/__pycache__
+**/*.pyc
+**/.venv
+**/*.egg-info

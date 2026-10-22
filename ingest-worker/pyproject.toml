@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 # `pip install -e .` is only ever meant to put `ingest` on sys.path — not to
 # resolve or upgrade dependencies. Install deps with:
 #     pip install -r requirements.txt
+#     pip install -e ../packages/retrieval   # shared gateway + embedders (chat ticket 01)
 dependencies = []
 
 # src layout: the import root is src/, so `import ingest` resolves to

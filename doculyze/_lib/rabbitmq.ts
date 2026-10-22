@@ -2,11 +2,14 @@ import "server-only";
 import amqp from "amqplib";
 import { logOperationalEvent } from "./operational_logger";
 
-// Topology — MUST match ingest-worker/src/ingest/consumer.py exactly. assertQueue
+// Topology — each queue MUST match its worker consumer exactly. assertQueue
 // hard-fails on an argument mismatch, which is the drift alarm we want.
-const QUEUE = process.env.INGEST_QUEUE ?? "doc.ingest";
-const DLX = "doc.ingest.dlx";
-const DEAD_QUEUE = "doc.ingest.dead";
+const INGEST_QUEUE = process.env.INGEST_QUEUE ?? "doc.ingest";
+const INGEST_DLX = "doc.ingest.dlx";
+const INGEST_DEAD_QUEUE = "doc.ingest.dead";
+const DELETE_QUEUE = process.env.DELETE_QUEUE ?? "doc.delete";
+const DELETE_DLX = "doc.delete.dlx";
+const DELETE_DEAD_QUEUE = "doc.delete.dead";
 
 let warnedDisabled = false;
 
@@ -48,24 +51,32 @@ async function connect(url: string): Promise<amqp.ConfirmChannel> {
   conn.on("close", invalidate);
   // Confirm channel (grill Q3/Q4): the broker acks a publish only after a persistent
   // message is fsync'd onto the durable queue, so the producer->broker hop stops
-  // being fire-and-forget. publishIngestJob awaits that ack.
+  // being fire-and-forget. Both job publishers await that ack.
   const ch = await conn.createConfirmChannel();
   ch.on("error", invalidate);
   ch.on("close", invalidate);
 
-  await ch.assertExchange(DLX, "direct", { durable: true });
-  await ch.assertQueue(DEAD_QUEUE, { durable: true });
-  await ch.bindQueue(DEAD_QUEUE, DLX, QUEUE);
-  await ch.assertQueue(QUEUE, {
+  await ch.assertExchange(INGEST_DLX, "direct", { durable: true });
+  await ch.assertQueue(INGEST_DEAD_QUEUE, { durable: true });
+  await ch.bindQueue(INGEST_DEAD_QUEUE, INGEST_DLX, INGEST_QUEUE);
+  await ch.assertQueue(INGEST_QUEUE, {
     durable: true,
-    arguments: { "x-dead-letter-exchange": DLX },
+    arguments: { "x-dead-letter-exchange": INGEST_DLX },
+  });
+
+  await ch.assertExchange(DELETE_DLX, "direct", { durable: true });
+  await ch.assertQueue(DELETE_DEAD_QUEUE, { durable: true });
+  await ch.bindQueue(DELETE_DEAD_QUEUE, DELETE_DLX, DELETE_QUEUE);
+  await ch.assertQueue(DELETE_QUEUE, {
+    durable: true,
+    arguments: { "x-dead-letter-exchange": DELETE_DLX },
   });
   
   console.log("RabbitMQ producer confirm channel ready");
   return ch;
 }
 
-// Returns a ready confirm channel, or null when ingest is disabled (RABBITMQ_URL
+// Returns a ready confirm channel, or null when background jobs are disabled (RABBITMQ_URL
 // unset — plain `npm run dev` without docker must not error-storm). Reuses the
 // cached connection and reconnects transparently after a drop.
 //

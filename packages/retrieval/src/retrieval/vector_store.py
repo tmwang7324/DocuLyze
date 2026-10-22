@@ -13,9 +13,9 @@ duplicating them. Every chunk records the embedding pin.
 import logging
 import uuid
 
-from ingest.config import embedding_dim, embedding_model, qdrant_api_key, qdrant_url
+from retrieval.config import embedding_dim, embedding_model, qdrant_api_key, qdrant_url
 
-log = logging.getLogger("ingest")
+log = logging.getLogger("retrieval")
 
 COLLECTION = "chunks"
 EMBED_BATCH = 128  # Voyage's per-request text cap
@@ -66,12 +66,14 @@ def _point_id(uid: str, doc_id: str, idx: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{uid}/{doc_id}/{idx}"))
 
 
-def _tenant_filter(uid: str, doc_id: str | None = None):
-    from qdrant_client.models import FieldCondition, Filter, MatchValue
+def _tenant_filter(uid: str, doc_ids: list[str] | None = None):
+    """userId always; docId narrows to "any of" doc_ids when given. The two AND,
+    so a doc id belonging to another user can only ever shrink the result."""
+    from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
     must = [FieldCondition(key="userId", match=MatchValue(value=uid))]
-    if doc_id is not None:
-        must.append(FieldCondition(key="docId", match=MatchValue(value=doc_id)))
+    if doc_ids is not None:
+        must.append(FieldCondition(key="docId", match=MatchAny(any=list(doc_ids))))
     return Filter(must=must)
 
 
@@ -81,7 +83,7 @@ def write_user_chunks(client, embed_fn, sparse_embed_fn, uid: str, doc_id: str, 
 
     client.delete(
         collection_name=COLLECTION,
-        points_selector=FilterSelector(filter=_tenant_filter(uid, doc_id)),
+        points_selector=FilterSelector(filter=_tenant_filter(uid, [doc_id])),
     )
     if not chunks:
         return
@@ -121,6 +123,23 @@ def write_user_chunks(client, embed_fn, sparse_embed_fn, uid: str, doc_id: str, 
     log.info("wrote %d chunks to qdrant for user=%s doc=%s", len(points), uid, doc_id)
 
 
+def delete_user_chunks(client, uid: str, doc_id: str) -> None:
+    """Delete one document's vectors, constrained by both tenant keys.
+
+    Qdrant filter deletion is idempotent: a replay against an already-empty
+    document succeeds. ``wait=True`` is required for the deletion worker—the
+    Firestore tombstone must not disappear before Qdrant confirms cleanup.
+    """
+    from qdrant_client.models import FilterSelector
+
+    client.delete(
+        collection_name=COLLECTION,
+        points_selector=FilterSelector(filter=_tenant_filter(uid, [doc_id])),
+        wait=True,
+    )
+    log.info("deleted qdrant chunks for user=%s doc=%s", uid, doc_id)
+
+
 def get_user_chunks(client, uid: str, doc_id: str):
     """Every stored chunk of one document — a filter read, no similarity."""
     out: list = []
@@ -128,7 +147,7 @@ def get_user_chunks(client, uid: str, doc_id: str):
     while True:
         points, offset = client.scroll(
             collection_name=COLLECTION,
-            scroll_filter=_tenant_filter(uid, doc_id),
+            scroll_filter=_tenant_filter(uid, [doc_id]),
             with_payload=True,
             with_vectors=False,
             limit=256,
@@ -146,15 +165,20 @@ def query_user_chunks(
     uid: str,
     query_text: str,
     n_results: int = 5,
-    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
 ):
     """Best chunks for `query_text` (dense + sparse, RRF-fused), scoped to this user
-    (and doc, if given). `distance` is the RRF score: higher is better."""
+    and, if given, to any of `doc_ids` (a Conversation's Scope). None searches all
+    of the user's chunks; an empty list searches nothing — widening an emptied
+    Scope back to everything is the caller's decision, not the gateway's.
+    `distance` is the RRF score: higher is better."""
     from qdrant_client.models import Fusion, FusionQuery, Prefetch
 
+    if doc_ids is not None and not doc_ids:
+        return []
     dense_q = embed_fn([query_text], input_type="query")[0]
     sparse_q = sparse_embed_fn([query_text], input_type="query")[0]
-    tenant = _tenant_filter(uid, doc_id)
+    tenant = _tenant_filter(uid, doc_ids)
     depth = max(n_results * 4, 20)
     result = client.query_points(
         collection_name=COLLECTION,

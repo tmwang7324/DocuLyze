@@ -15,7 +15,13 @@ import pytest
 import support
 
 from ingest.config import lease_ttl_s
-from ingest.firestore_status import Claim, claim_for_processing, mark_failed, mark_ready
+from ingest.firestore_status import (
+    Claim,
+    claim_for_processing,
+    deletion_requested,
+    mark_failed,
+    mark_ready,
+)
 
 UID = "user-a"
 DOC = "doc-1"
@@ -69,8 +75,8 @@ def test_processing_with_missing_claimedat_is_rerun(db):
     assert _claimed_at(db) is not None
 
 
-def test_ready_and_failed_are_skip_with_no_regression(db):
-    for status in ("ready", "failed"):
+def test_terminal_and_deleting_are_skip_with_no_regression(db):
+    for status in ("ready", "failed", "deleting"):
         seed(status)
         assert claim_for_processing(db, UID, DOC) is Claim.SKIP
         assert support.read_status(UID, DOC) == status
@@ -109,6 +115,23 @@ def test_mark_ready_flips_processing_to_ready(db):
     mark_ready(db, UID, DOC)
 
     assert support.read_status(UID, DOC) == "ready"
+
+
+def test_terminal_writes_cannot_overwrite_deleting(db):
+    seed("deleting")
+
+    assert mark_failed(db, UID, DOC) is False
+    assert mark_ready(db, UID, DOC) is False
+    assert support.read_status(UID, DOC) == "deleting"
+
+
+def test_deletion_requested_includes_tombstone_and_absent(db):
+    seed("deleting")
+    assert deletion_requested(db, UID, DOC) is True
+    assert deletion_requested(db, UID, "missing") is True
+
+    seed("processing")
+    assert deletion_requested(db, UID, DOC) is False
 
 
 def _doc_ref(db):

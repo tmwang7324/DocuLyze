@@ -16,18 +16,44 @@ from pathlib import Path
 
 
 
+from retrieval.embedding import create_embedder, create_sparse_embedder
+from retrieval.vector_store import (
+    delete_user_chunks,
+    get_user_chunks,
+    qdrant_client,
+    write_user_chunks,
+)
+
 from ingest.chunker import chunk_markdown
 from ingest.config import chunk_output_dir, firestore_client, storage_bucket
-from ingest.embedding import create_embedder, create_sparse_embedder
-from ingest.firestore_status import Claim, claim_for_processing, mark_failed, mark_ready
+from ingest.firestore_status import (
+    Claim,
+    claim_for_processing,
+    deletion_requested,
+    mark_failed,
+    mark_ready,
+)
 from ingest.parsers import is_slide_pdf, needs_ocr_fallback, parser_for
 from ingest.paths import document_storage_path
 from ingest.precheck import precheck
 from ingest.sandbox import ParseError, run_parser_sandboxed
-from ingest.vector_store import get_user_chunks, qdrant_client, write_user_chunks
 
 log = logging.getLogger("ingest")
 current_dir = Path(__file__).resolve().parent
+
+
+def _stop_for_deletion(db, uid: str, doc_id: str, *, vectors_written: bool = False) -> bool:
+    """Check for deletion between major phases, never by polling.
+
+    If deletion races a completed Qdrant write, ingest removes its own write
+    before returning so the delete worker and ingest worker converge safely.
+    """
+    if not deletion_requested(db, uid, doc_id):
+        return False
+    if vectors_written:
+        delete_user_chunks(qdrant_client(), uid, doc_id)
+    log.info("deletion requested; stopping ingest for %s/%s", uid, doc_id)
+    return True
 
 
 def run_ingest_job(envelope: dict) -> str:
@@ -48,6 +74,9 @@ def run_ingest_job(envelope: dict) -> str:
     )
     content_type = snap.get("contentType")
     data = storage_bucket().blob(document_storage_path(uid, doc_id)).download_as_bytes()
+
+    if _stop_for_deletion(db, uid, doc_id):
+        return "skipped"
 
     if not precheck(content_type, data):
         log.warning("precheck rejected %s/%s (%s)", uid, doc_id, content_type)
@@ -78,6 +107,9 @@ def run_ingest_job(envelope: dict) -> str:
     except ParseError as exc:
         log.warning("parse failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)  # object retained
+        return "skipped"
+
+    if _stop_for_deletion(db, uid, doc_id):
         return "skipped"
 
     # Good file: chunk the parsed text (document-level — mark_failed on error).
@@ -114,6 +146,8 @@ def run_ingest_job(envelope: dict) -> str:
     # NOTE this deliberately diverges from CONTEXT.md, which
     # routes dependency outages to the DLQ instead of `failed` — revisit if
     # outage-vs-bad-document is ever split. Chunking's guard above stays narrow.
+    if _stop_for_deletion(db, uid, doc_id):
+        return "skipped"
     try:
         write_user_chunks(
             qdrant_client(), create_embedder(), create_sparse_embedder(), uid, doc_id, chunks
@@ -121,6 +155,9 @@ def run_ingest_job(envelope: dict) -> str:
     except Exception as exc:
         log.warning("chunk write failed for %s/%s: %s", uid, doc_id, exc)
         mark_failed(db, uid, doc_id)
+        return "skipped"
+
+    if _stop_for_deletion(db, uid, doc_id, vectors_written=True):
         return "skipped"
 
     try:
@@ -135,5 +172,10 @@ def run_ingest_job(envelope: dict) -> str:
         mark_failed(db, uid, doc_id)
         return "skipped"
 
-    mark_ready(db, uid, doc_id)
+    # Transaction-fenced: a deletion that lands after the checkpoint cannot be
+    # overwritten by `ready`; ingest then removes the vectors it just wrote.
+    if not mark_ready(db, uid, doc_id):
+        if deletion_requested(db, uid, doc_id):
+            delete_user_chunks(qdrant_client(), uid, doc_id)
+        return "skipped"
     return "finished"

@@ -29,7 +29,10 @@ services:
     # /api/v2/heartbeat with, so dependents wait on service_started.
 
   ingest-worker:
-    build: ./ingest-worker
+    # Repo-root context so the image can install packages/retrieval (chat ticket 01).
+    build:
+      context: .
+      dockerfile: ingest-worker/Dockerfile
     environment:
       RABBITMQ_URL: amqp://doculyze:${RABBITMQ_PASS:-devpass}@rabbitmq:5672
       INGEST_QUEUE: doc.ingest
@@ -53,6 +56,39 @@ services:
         condition: service_healthy
       chromadb:
         condition: service_started
+
+  delete-worker:
+    build:
+      context: .
+      dockerfile: delete-worker/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://doculyze:${RABBITMQ_PASS:-devpass}@rabbitmq:5672
+      DELETE_QUEUE: doc.delete
+      FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-doculyze.firebasestorage.app}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/serviceAccount.json
+      QDRANT_URL: ${QDRANT_URL:-}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+    volumes:
+      - ./doculyze/serviceAccount.json:/run/secrets/serviceAccount.json:ro
+    networks: [ingest]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  awesome-chat-service:
+    # Stateless chat service (ADR-0006). Only Next calls it; it trusts the uid
+    # Next sends, so it must never be reachable from outside.
+    build:
+      context: .
+      dockerfile: awesome-chat-service/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      QDRANT_URL: ${QDRANT_URL:-}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      # Must match the ingest worker's pin — queries embed into the same space.
+      EMBEDDING_MODEL: voyage-3.5-lite
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+    networks: [ingest]      # no `ports:` — internal only
 
 volumes:
   chunk-output:

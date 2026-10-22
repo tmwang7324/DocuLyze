@@ -18,6 +18,17 @@ serviceAccount.json
 # Kubernetes secrets — raw (real values) and sealed output
 kubernetes/doculyze-secrets.raw.yml
 kubernetes/doculyze-sealed-secrets.yml
+kubernetes/doculyze-secrets.yml
+
+# Python-generated artifacts - never source
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+
+# Local scratch and generated operational output
+.scratch/
+doculyze/doculyze/*-audit.json
+doculyze/doculyze/logs-*.jsonl
 
 # Installed dependencies — any depth
 node_modules/

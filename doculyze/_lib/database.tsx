@@ -9,7 +9,7 @@ import { createHash } from 'crypto';
 
 // Lifecycle of a document ref. The first-upload slice only ever sets "uploaded";
 // "processing" / "ready" / "failed" arrive with the RAG ingest pipeline later.
-export type DocStatus = "uploaded" | "processing" | "ready" | "failed" | "pending" | "";
+export type DocStatus = "uploaded" | "processing" | "ready" | "failed" | "pending" | "deleting" | "";
 
 
 export type DocumentRecord = {

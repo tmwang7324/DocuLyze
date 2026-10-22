@@ -78,24 +78,8 @@ def chunk_output_dir() -> str | None:
     return os.environ.get("CHUNK_OUTPUT_DIR") or None
 
 
-def embedding_model() -> str:
-    # The embedding pin (issue #29): recorded alongside every stored chunk.
-    # Changing it is an explicit full re-embed migration — mixing vector
-    # spaces/dimensions in one collection silently corrupts retrieval.
-    return os.environ.get("EMBEDDING_MODEL", "voyage-3.5-lite")
-
-
-def qdrant_url() -> str:
-    return os.environ["QDRANT_URL"]  # Qdrant Cloud cluster URL; required, fail loudly
-
-
-def qdrant_api_key() -> str:
-    return os.environ["QDRANT_API_KEY"]  # required, fail loudly; from DocuLyze/.env (repo root), passed through by docker-compose
-
-
-def embedding_dim() -> int:
-    # Dense vector size of the pinned model (voyage-3.5-lite = 1024).
-    return int(os.environ.get("EMBEDDING_DIM", "1024"))
+# Embedding pin, Qdrant and Voyage settings moved to retrieval.config (chat
+# grill, ticket 01) — shared with the chat service so both sides agree.
 
 
 # --- LEGACY (ChromaDB, kept for review, see ADR-0004) ---
@@ -105,12 +89,6 @@ def embedding_dim() -> int:
 #
 # def chroma_port() -> int:
 #     return int(os.environ.get("CHROMA_PORT", "8000"))
-
-
-def voyage_api_key() -> str | None:
-    # Same var the voyageai SDK resolves itself; read it here so the key stays
-    # a config concern and never gets hardcoded at a call site.
-    return os.environ.get("VOYAGE_API_KEY")  # from DocuLyze/.env (repo root), passed through by docker-compose
 
 
 def lease_ttl_s() -> int:
@@ -163,6 +141,8 @@ def storage_bucket():
 if __name__ == "__main__":
     # Smoke check: `python -m ingest.config` prints resolved config and proves
     # Firebase Admin initializes without touching business logic.
+    from retrieval.config import embedding_model, voyage_api_key
+
     logging.basicConfig(level=logging.INFO)
     print(f"RABBITMQ_URL          = {rabbitmq_url() or '(unset — ingest disabled)'}")
     print(f"INGEST_QUEUE          = {ingest_queue()}")

@@ -1,0 +1,1 @@
+"""DocuLyze document-deletion worker."""
