@@ -90,6 +90,13 @@ export async function readDocumentRecord(
   return snap.exists ? snap.data() ?? null : null;
 }
 
+export async function readUserRecord(
+  uid: string
+): Promise<FirebaseFirestore.DocumentData | null> {
+  const snap = await db.collection("users").doc(uid).get();
+  return snap.exists ? snap.data() ?? null : null;
+}
+
 // List every document record under a user (no status filter, no ordering) — for
 // counting records and asserting no duplicates / no cross-user leakage.
 export async function listUserDocuments(

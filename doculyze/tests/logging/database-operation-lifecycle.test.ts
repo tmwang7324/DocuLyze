@@ -19,7 +19,7 @@ import {
   resetOperationalLoggerForTests,
   setOperationalLoggerForTests,
 } from "@/_lib/operational_logger";
-import { authAs, backdateDocument, resetEmulators } from "../helpers/harness";
+import { authAs, backdateDocument, readUserRecord, resetEmulators } from "../helpers/harness";
 
 class CapturingTransport extends Transport {
   readonly events: Record<string, unknown>[] = [];
@@ -155,11 +155,30 @@ describe("Firestore data-layer operation lifecycle seam", () => {
   it("creates a user profile with one safe terminal event", async () => {
     const transport = captureEvents();
 
+    // Seed the legacy fields to prove a merge write removes them rather than
+    // merely adding hashes alongside reusable credentials.
+    const { db } = await import("@/_lib/admin");
+    await db.collection("users").doc("user-a").set({
+      password: "old-plaintext-password",
+      sessionCookie: "old-reusable-cookie",
+    });
+
     await expect(createUserProfile({
       email: "user@example.test",
       password: "correct horse battery staple",
       sessionCookie: "session-cookie",
     })).resolves.toBe("user-a");
+
+    const stored = await readUserRecord("user-a");
+    expect(stored).toEqual(expect.objectContaining({
+      email: "user@example.test",
+      passwordHash: expect.stringMatching(/^scrypt\$32768\$8\$1\$/),
+      sessionCookieHash: expect.stringMatching(/^sha256\$/),
+    }));
+    expect(stored).not.toHaveProperty("password");
+    expect(stored).not.toHaveProperty("sessionCookie");
+    expect(JSON.stringify(stored)).not.toContain("correct horse battery staple");
+    expect(JSON.stringify(stored)).not.toContain("session-cookie");
 
     expect(transport.events).toEqual([
       expect.objectContaining({

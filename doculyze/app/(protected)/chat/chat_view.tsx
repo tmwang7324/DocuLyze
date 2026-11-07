@@ -1,12 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createSseParser } from "@/_lib/chat_events";
 
 type ViewMessage = {
     role: "user" | "assistant";
     content: string;
     status?: "complete" | "stopped" | "failed" | "streaming";
+    error?: string;
 };
 
 // Minimal chat: a message list and a chat bar. The question goes out as a POST
@@ -22,8 +23,24 @@ export default function ChatView({
     const [messages, setMessages] = useState<ViewMessage[]>(initialMessages);
     const [input, setInput] = useState("");
     const [streaming, setStreaming] = useState(false);
+    const [health, setHealth] = useState<"checking" | "available" | "unavailable">("checking");
     const conversationId = useRef(initialConversationId);
     const abort = useRef<AbortController | null>(null);
+
+    const checkHealth = useCallback(async () => {
+        setHealth("checking");
+        try {
+            const res = await fetch("/api/awesome-chat", { cache: "no-store" });
+            if (!res.ok) throw new Error(`Health check returned HTTP ${res.status}`);
+            setHealth("available");
+            console.info("[chat] Chat service is available");
+        } catch (error) {
+            console.error("[chat] Chat service health check failed", error);
+            setHealth("unavailable");
+        }
+    }, []);
+
+    useEffect(() => { void checkHealth(); }, [checkHealth]);
 
     // Replace the last (assistant) message — the one currently streaming.
     const updateLast = (fn: (m: ViewMessage) => ViewMessage) =>
@@ -31,7 +48,7 @@ export default function ChatView({
 
     async function send() {
         const question = input.trim();
-        if (!question || streaming) return;
+        if (!question || streaming || health !== "available") return;
         setInput("");
         setStreaming(true);
         setMessages((prev) => [
@@ -60,7 +77,10 @@ export default function ChatView({
             const parse = createSseParser((event) => {
                 if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
                 else if (event.type === "done") updateLast((m) => ({ ...m, status: "complete" }));
-                else if (event.type === "error") updateLast((m) => ({ ...m, content: "", status: "failed" }));
+                else if (event.type === "error") {
+                    console.error("[chat] Stream error:", event.message);
+                    updateLast((m) => ({ ...m, status: "failed", error: event.message }));
+                }
             });
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
@@ -70,10 +90,11 @@ export default function ChatView({
                 parse(decoder.decode(value, { stream: true }));
             }
             // Stream ended without done or error: treat as failed.
-            updateLast((m) => (m.status === "streaming" ? { ...m, content: "", status: "failed" } : m));
-        } catch {
+            updateLast((m) => (m.status === "streaming" ? { ...m, status: "failed", error: "The response ended before completion." } : m));
+        } catch (error) {
+            if (!controller.signal.aborted) console.error("[chat] Request failed", error);
             updateLast((m) =>
-                controller.signal.aborted ? { ...m, status: "stopped" } : { ...m, content: "", status: "failed" }
+                controller.signal.aborted ? { ...m, status: "stopped" } : { ...m, status: "failed", error: "The chat request failed. Check the browser console." }
             );
         } finally {
             abort.current = null;
@@ -101,13 +122,20 @@ export default function ChatView({
                                 <div className="text-xs text-muted mt-1">Stopped</div>
                             )}
                             {m.status === "failed" && (
-                                <div className="text-xs text-error mt-1">Answer failed. Try again.</div>
+                                <div className="text-xs text-error mt-1">{m.error || "Answer failed. Try again."}</div>
                             )}
                         </div>
                     </div>
                 ))}
             </div>
 
+            {health !== "available" && (
+                <div role="status" className="text-sm text-muted py-2">
+                    {health === "checking" ? "Checking chat service…" : (
+                        <>Chat service unavailable. <button type="button" className="underline" onClick={() => void checkHealth()}>Retry</button></>
+                    )}
+                </div>
+            )}
             <form
                 className="flex gap-2 py-4 border-t border-hairline"
                 onSubmit={(e) => {
@@ -134,7 +162,7 @@ export default function ChatView({
                     <button
                         type="submit"
                         className="rounded-full px-5 py-2 bg-orange-primary text-white disabled:opacity-50"
-                        disabled={!input.trim()}
+                        disabled={!input.trim() || health !== "available"}
                     >
                         Send
                     </button>

@@ -31,7 +31,8 @@ export const dynamic = "force-dynamic";
 //
 // 300 is the ceiling on Vercel's free tier. If the plan rejects it, the build
 // fails and this has to come down to 60.
-export const maxDuration = 300;
+// ADR moving to Kubernetes, where maxDuration is managed differently
+// export const maxDuration = 300;
 
 const KEEPALIVE_MS = 15_000; // SSE comments defeat proxy buffering
 const HARD_DEADLINE_MS = 5 * 60_000; // generous bound on abandoned streams

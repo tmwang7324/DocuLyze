@@ -15,12 +15,7 @@ export const metadata: Metadata = {
 // hands off to the pipeline view once an upload starts. Right: the user's most
 // recent documents, so an upload can be seen joining the archive without leaving
 // the screen.
-//
-// Deliberately NOT ported from the prototype: its multi-file session list with
-// per-row progress bars (timer-driven fakes, and this codebase uploads one
-// document at a time) and its search panel (the query path is a separate
-// ticket). The single-document model is unchanged.
-//
+
 // Server Component — it reads the DAL directly, the way the archive does. The
 // upload mechanics are untouched: presign, direct byte PUT, finalize and the
 // per-document event stream all still live in the client form below.

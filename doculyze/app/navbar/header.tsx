@@ -25,25 +25,14 @@ import HomeLink from "./home_link";
 import Features from "./features";
 import AuthProfile from "./upload";
 import MobileMenu from "./mobile_menu";
-import { ROUNDED, type NavLayout } from "./layout_classes";
+import { navLinkClass, ROUNDED, type NavLayout } from "./layout_classes";
 
-// Static: the chat route doesn't exist yet — the RAG pipeline lands with ticket
-// #5. Kept in the bar to preserve the design's shape, pointing nowhere until
-// there's something to point at. Not an island; it reads the same signed in or
-// out.
-function ChatPlaceholder({ layout }: { layout: NavLayout }) {
+// Static link: the protected route itself owns authentication.
+function ChatLink({ layout }: { layout: NavLayout }) {
     return (
-        <span
-            aria-disabled="true"
-            className={
-                layout === "desktop"
-                    ? "font-body text-sm font-medium text-muted/60 cursor-not-allowed"
-                    : "text-sm font-medium text-muted/60 cursor-not-allowed"
-            }
-            title="Coming soon"
-        >
+        <Link href="/chat" className={navLinkClass(layout)}>
             Chat
-        </span>
+        </Link>
     );
 }
 
@@ -61,7 +50,7 @@ export default function Header() {
 
                 <div className="hidden md:flex items-center gap-8">
                     <HomeLink layout="desktop" />
-                    <ChatPlaceholder layout="desktop" />
+                    <ChatLink layout="desktop" />
                     <Features layout="desktop" />
                 </div>
 
@@ -74,7 +63,7 @@ export default function Header() {
                     menu — see mobile_menu.tsx for why that distinction matters. */}
                 <MobileMenu>
                     <HomeLink layout="mobile" />
-                    <ChatPlaceholder layout="mobile" />
+                    <ChatLink layout="mobile" />
                     <Features layout="mobile" />
                     <AuthProfile layout="mobile" />
                 </MobileMenu>

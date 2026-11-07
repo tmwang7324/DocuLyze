@@ -6,6 +6,8 @@
 !awesome-chat-service/*.py
 !packages/retrieval
 **/__pycache__
+**/.pytest_cache
+awesome-chat-service/.pytest_cache/
 **/*.pyc
 **/.venv
 **/*.egg-info

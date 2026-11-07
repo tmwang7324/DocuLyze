@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -15,12 +16,10 @@ from turn import ChatRequest, TurnDeps, run_turn
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 app = FastAPI()
-
+logger = logging.getLogger(__name__)
 
 @cache
 def turn_deps() -> TurnDeps:
-    """Built on the first request, not at import, so a missing key fails a Turn
-    rather than the process."""
     return TurnDeps(
         qdrant=qdrant_client(),
         embed_fn=create_embedder(),
@@ -31,18 +30,31 @@ def turn_deps() -> TurnDeps:
 
 
 async def chat_controller(body: ChatRequest) -> StreamingResponse:
-    """Relay run_turn's events as SSE frames. Internal-only: the caller is Next's
-    route handler, which already checked the session and supplies the uid."""
-    deps = turn_deps()
-
+    """Stream one retrieval-grounded Turn as SSE."""
+    logger.info("Chat stream started")
     async def frames():
-        async for event in run_turn(body, deps):
-            yield f"data: {json.dumps(event)}\n\n"
+        try:
+            deps = await asyncio.to_thread(turn_deps)
+            async for event in run_turn(body, deps):
+                if event.get("type") == "error":
+                    logger.error("Chat turn failed: %s", event.get("message", "unknown error"))
+                elif event.get("type") == "done":
+                    logger.info("Chat stream completed")
+                yield f"data: {json.dumps(event)}\n\n"
+        except asyncio.CancelledError:
+            logger.info("Chat stream stopped")
+            raise
+        except Exception:
+            logger.exception("Chat stream failed")
+            yield f'data: {json.dumps({"type": "error", "message": "Chat service failed to start the answer."})}\n\n'
 
     return StreamingResponse(
         frames(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache, no-transform"},
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -9,7 +9,7 @@ vi.mock("@/_lib/data", () => ({
   getCurrentUid: async () => (globalThis as Record<string, unknown>).__TEST_UID__ ?? null,
 }));
 
-import { POST } from "@/app/api/awesome-chat/route";
+import { GET, POST } from "@/app/api/awesome-chat/route";
 import { createSseParser, type ChatEvent } from "@/_lib/chat_events";
 import { createConversation, readTranscript } from "@/_lib/conversations";
 import { authAs, resetEmulators } from "../helpers/harness";
@@ -25,6 +25,10 @@ let lastBody: Record<string, unknown> | null = null;
 let upstreamClosed = false;
 
 const stub = http.createServer((req, res) => {
+  if (req.method === "GET") {
+    res.writeHead(mode === "http-500" ? 500 : 200).end();
+    return;
+  }
   let raw = "";
   req.on("data", (c) => (raw += c));
   req.on("end", () => {
@@ -91,6 +95,11 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 5000): P
 
 // --- Tests -------------------------------------------------------------------
 describe("chat ticket 02 — /api/awesome-chat route handler", () => {
+  it("reports whether the chat service is reachable", async () => {
+    expect((await GET()).status).toBe(200);
+    mode = "http-500";
+    expect((await GET()).status).toBe(503);
+  });
   it("returns 401 without a session and never calls the chat service", async () => {
     authAs(null);
     const res = await post({ question: "hi" });
@@ -139,7 +148,7 @@ describe("chat ticket 02 — /api/awesome-chat route handler", () => {
     const res = await post({ question: "Will this survive?" });
     const conversationId = res.headers.get("X-Conversation-Id")!;
 
-    expect(await readEvents(res)).toEqual([{ type: "error", message: "Answer failed." }]);
+    expect(await readEvents(res)).toEqual([{ type: "error", message: "Chat service connection or stream failed. Check the server console." }]);
     expect(await readTranscript(UID, conversationId)).toEqual([
       { role: "user", content: "Will this survive?", seq: 0 },
       { role: "assistant", content: "", seq: 1, status: "failed" },

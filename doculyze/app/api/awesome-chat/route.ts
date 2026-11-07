@@ -45,6 +45,19 @@ function chatServiceUrl(): string {
   return url.replace(/\/$/, "");
 }
 
+export async function GET() {
+  if (!(await getCurrentUid())) return new Response("Unauthorized", { status: 401 });
+  try {
+    const res = await fetch(chatServiceUrl(), { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`health check returned HTTP ${res.status}`);
+    console.info("[chat] Chat service is available");
+    return Response.json({ available: true });
+  } catch (error) {
+    console.error("[chat] Chat service health check failed", error);
+    return Response.json({ available: false }, { status: 503 });
+  }
+}
+
 export async function POST(req: Request) {
   const uid = await getCurrentUid(); // hot read — no checkRevoked round-trip
   if (!uid) {
@@ -107,6 +120,7 @@ export async function POST(req: Request) {
           const parse = createSseParser((event) => {
             if (event.type === "token") text += event.text;
             else if (event.type === "done") outcome = "complete";
+            else if (event.type === "error") console.error("[chat] Chat service stream error:", event.message);
             send(sseFrame(event));
           });
           const reader = res.body.getReader();
@@ -116,9 +130,13 @@ export async function POST(req: Request) {
             if (done) break;
             parse(decoder.decode(value, { stream: true }));
           }
-        } catch {
+          if (outcome !== "complete" && !upstream.signal.aborted) {
+            console.error("[chat] Chat service stream ended without a done event");
+          }
+        } catch (error) {
           if (!upstream.signal.aborted) {
-            send(sseFrame({ type: "error", message: "Answer failed." }));
+            console.error("[chat] Stream failed", error);
+            send(sseFrame({ type: "error", message: "Chat service connection or stream failed. Check the server console." }));
           }
         } finally {
           if (upstream.signal.aborted && outcome !== "complete") outcome = "stopped";
@@ -149,7 +167,8 @@ export async function POST(req: Request) {
             userId: uid,
             conversationId,
           });
-        } catch {
+        } catch (error) {
+          console.error("[chat] Failed to save the assistant message", error);
           logOperationalEvent("error", {
             operation: "chatTurn",
             lifecycle: "persist-failed",

@@ -4,7 +4,52 @@ import { db, storage } from "@/_lib/admin";
 import { requireUid } from "@/_lib/data";
 import { formatBytes } from "@/_lib/fileupload_schema";
 import { logOperationalEvent } from "@/_lib/operational_logger";
-import { createHash } from 'crypto';
+import { createHash, randomBytes, scrypt } from "node:crypto";
+
+
+const SCRYPT_N = 2 ** 15;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEY_LENGTH = 64;
+const SCRYPT_MAX_MEMORY = 64 * 1024 * 1024;
+const PASSWORD_SALT_BYTES = 16;
+
+function derivePasswordKey(password: string, salt: Buffer): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+        scrypt(
+            password,
+            salt,
+            SCRYPT_KEY_LENGTH,
+            { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: SCRYPT_MAX_MEMORY },
+            (error, derivedKey) => {
+                if (error) reject(error);
+                else resolve(derivedKey);
+            }
+        );
+    });
+}
+
+// Parameters and salt travel with the digest so a future verifier can
+// reproduce the derivation and the cost can be upgraded deliberately.
+export async function hashPassword(password: string): Promise<string> {
+    const salt = randomBytes(PASSWORD_SALT_BYTES);
+    const digest = await derivePasswordKey(password, salt);
+    return [
+        "scrypt",
+        SCRYPT_N,
+        SCRYPT_R,
+        SCRYPT_P,
+        salt.toString("base64url"),
+        digest.toString("base64url"),
+    ].join("$");
+}
+
+// Firebase session cookies are high-entropy bearer credentials, so a fast
+// one-way digest is appropriate; unlike a password, there is no low-entropy
+// search space to harden with a password KDF.
+export function hashSessionCookie(sessionCookie: string): string {
+    return `sha256$${createHash("sha256").update(sessionCookie, "utf8").digest("base64url")}`;
+}
 
 
 // Lifecycle of a document ref. The first-upload slice only ever sets "uploaded";
@@ -26,8 +71,8 @@ export type DocumentRecord = {
 
 export type UserRecord = {
     email: string,
-    password: string,
-    sessionCookie: string
+    passwordHash: string,
+    sessionCookieHash: string
 };
 
 // Path to a user's document subcollection: users/{uid}/documents
@@ -55,10 +100,18 @@ export async function createUserProfile(input: {
     const startedAt = Date.now();
     try {
         const uid = await requireUid();
+        const [passwordHash, sessionCookieHash] = await Promise.all([
+            hashPassword(input.password),
+            Promise.resolve(hashSessionCookie(input.sessionCookie)),
+        ]);
         await db.collection("users").doc(uid).set({
             email: input.email,
-            password: input.password,
-            sessionCookie: input.sessionCookie
+            passwordHash,
+            sessionCookieHash,
+            // Remove credentials written by the legacy schema when this user
+            // next signs in; merge writes would otherwise leave them behind.
+            password: FieldValue.delete(),
+            sessionCookie: FieldValue.delete(),
         }, { merge: true });
         // Profile writes identify only the authenticated owner; credentials and contact data never leave the DAL.
         logOperationalEvent("info", {
