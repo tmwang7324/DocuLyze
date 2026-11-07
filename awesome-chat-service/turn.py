@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from retrieval.vector_store import query_user_chunks
 
 from config import search_concurrency, search_timeout_s
-from plan import Plan, merge_round_robin, parse_plan, pass_through, planner_messages
+from plan import Plan, gate_messages, merge_round_robin, parse_gate, parse_plan, pass_through, planner_messages
 
 log = logging.getLogger("chat")
 
@@ -116,6 +116,9 @@ class TurnDeps:
     top_k: int = 8
     # planner: messages -> JSON text. None = pass-through plan (the raw question).
     plan_fn: Callable[[list[dict]], Awaitable[str]] | None = None
+    # needs-search gate: messages -> JSON text {"needs_search": bool}. None = no gate
+    # (the planner alone decides, as before).
+    needs_search_fn: Callable[[list[dict]], Awaitable[str]] | None = None
     # reranker: (query, texts) -> indices, best first. None = keep RRF order.
     rerank_fn: Callable[[str, list[str]], Awaitable[list[int]]] | None = None
     today: Callable[[], dt.date] = field(default=dt.date.today)
@@ -178,15 +181,46 @@ def to_sources(request: ChatRequest, chunks: list[dict]) -> list[dict]:
 
 
 async def make_plan(request: ChatRequest, deps: TurnDeps) -> Plan:
-    """Planner failure or bad JSON falls back to pass-through, marked degraded."""
+    """Two agents, one decision each. The gate (small, fast model) decides ONLY
+    whether the message needs a search; the planner decomposes it. The planner
+    starts speculatively alongside the gate and is cancelled when the gate says no,
+    so a search Turn waits for the slower of the two, not their sum. Every failure
+    resolves toward searching, marked degraded."""
     if deps.plan_fn is None:
         return pass_through(request.question)
     titles = [d.file_name for d in request.documents or []]
+    planner = asyncio.ensure_future(
+        deps.plan_fn(planner_messages(request.question, request.history, titles, deps.today()))
+    )
     try:
-        raw = await deps.plan_fn(planner_messages(request.question, request.history, titles, deps.today()))
-        return parse_plan(raw)
-    except Exception as exc:  # noqa: BLE001 — any planner failure degrades, never fails the Turn
-        return pass_through(request.question, degraded=True, note=f"planner failed: {type(exc).__name__}: {exc}"[:200])
+        gate, gate_note = "off", None
+        if deps.needs_search_fn is not None:
+            try:
+                raw = await deps.needs_search_fn(gate_messages(request.question, request.history))
+                gate = "search" if parse_gate(raw) else "skip"
+            except Exception as exc:  # noqa: BLE001 — an unreadable gate means "search", never "skip"
+                gate, gate_note = "failed", f"gate failed: {type(exc).__name__}: {exc}"[:200]
+            if gate == "skip":
+                return Plan(request.question, [], gate="skip")
+
+        try:
+            plan = parse_plan(await planner)
+        except Exception as exc:  # noqa: BLE001 — any planner failure degrades, never fails the Turn
+            plan = pass_through(request.question, degraded=True, note=f"planner failed: {type(exc).__name__}: {exc}"[:200])
+        if gate != "off" and not plan.sub_queries:
+            # The gate said (or defaulted to) search, so zero Sub-queries is a disagreement.
+            plan = pass_through(plan.standalone, degraded=True, note="planner returned no sub-queries after the gate said search")
+        if gate_note:
+            plan.degraded = True
+            plan.notes.append(gate_note)
+        plan.gate = gate
+        return plan
+    finally:
+        # Covers the gate-said-skip return and a cancelled Turn alike: never leave a
+        # speculative gpt-5.4 request running for an answer nobody will read.
+        if not planner.done():
+            planner.cancel()
+            await asyncio.gather(planner, return_exceptions=True)
 
 
 async def search(request: ChatRequest, deps: TurnDeps, plan: Plan) -> list[dict]:
@@ -248,8 +282,8 @@ async def run_turn(request: ChatRequest, deps: TurnDeps) -> AsyncIterator[dict]:
             return
 
     log.info(
-        "plan for uid=%s: mode=%s, %d sub-queries, %s chunks, degraded=%s%s",
-        request.uid, request.answer_mode, len(plan.sub_queries), "no search" if chunks is None else len(chunks),
+        "plan for uid=%s: mode=%s, gate=%s, %d sub-queries, %s chunks, degraded=%s%s",
+        request.uid, request.answer_mode, plan.gate, len(plan.sub_queries), "no search" if chunks is None else len(chunks),
         plan.degraded, f" ({'; '.join(plan.notes)})" if plan.notes else "",
     )
     yield plan.event()

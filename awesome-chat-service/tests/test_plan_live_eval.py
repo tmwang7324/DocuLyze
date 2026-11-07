@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(
     reason="live eval: set RUN_LIVE_EVAL=1 with OPENAI_API_KEY and VOYAGE_API_KEY",
 )
 
-from plan import parse_plan, planner_messages  # noqa: E402
+from plan import gate_messages, parse_gate, parse_plan, planner_messages  # noqa: E402
 from turn import Message  # noqa: E402
 
 TODAY = dt.date(2026, 11, 6)
@@ -46,6 +46,13 @@ async def plan(question, history=()):
     from generate import plan_fn
 
     return parse_plan(await plan_fn(planner_messages(question, list(history), TITLES, TODAY)))
+
+
+async def gate(question, history=()) -> bool:
+    """The real needs-search agent (gpt-5.4-mini): True = needs a search."""
+    from generate import needs_search_fn
+
+    return parse_gate(await needs_search_fn(gate_messages(question, list(history))))
 
 
 async def judge(query: str, passage: str) -> bool:
@@ -101,12 +108,42 @@ def test_follow_up_resolves_to_the_topic_from_history():
     assert run(judge(p.sub_queries[0], SRE[0])), "the follow-up sub-query should target error budgets"
 
 
-def test_thanks_and_reformatting_need_no_search():
-    history = [Message(role="user", content="What is a heap?"), Message(role="assistant", content="A tree-shaped priority structure [1].")]
-    for msg in ("Thanks!", "put that in a table"):
-        p = run(plan(msg, history))
-        print(f"\n{msg!r} -> {p}")
-        assert p.sub_queries == []
+HEAP_CHAT = [
+    Message(role="user", content="What is a heap?"),
+    Message(role="assistant", content="A heap is a complete binary tree stored in an array; the minimum sits at the root [1]."),
+]
+
+# Labelled set for the gate. The dangerous error is skipping a search that was
+# needed (a wrong answer with no sources), so SEARCH cases must be 100%.
+GATE_SKIP = ["Thanks!", "thank you so much", "hi there", "ok got it", "put that in a table", "make it shorter",
+             "translate that to Spanish", "turn that into bullet points", "what did you just say?"]
+GATE_SEARCH = ["explain that more simply", "give me an example", "what about heap deletion?", "can you elaborate on the first point?",
+               "What is an error budget?", "Compare error budgets with heap insertion", "what changed in the handbook this year?",
+               "what is a B-tree?", "summarize the document", "how long does extract-min take?"]
+
+
+def test_gate_labelled_set_never_skips_a_needed_search():
+    results = {q: run(gate(q, HEAP_CHAT)) for q in GATE_SKIP + GATE_SEARCH}
+    wrong_skip = [q for q in GATE_SEARCH if not results[q]]  # needed a search, gate said no
+    wrong_search = [q for q in GATE_SKIP if results[q]]  # cheap miss: an unneeded search
+    print(f"\ngate: {len(GATE_SEARCH) - len(wrong_skip)}/{len(GATE_SEARCH)} search cases right, "
+          f"{len(GATE_SKIP) - len(wrong_search)}/{len(GATE_SKIP)} skip cases right")
+    print("  wrongly skipped (dangerous):", wrong_skip)
+    print("  wrongly searched (cheap):", wrong_search)
+    assert not wrong_skip, f"gate skipped searches that were needed: {wrong_skip}"
+    assert len(wrong_search) <= 1, f"gate searched too eagerly: {wrong_search}"
+
+
+def test_gate_with_no_history_still_searches_a_real_question():
+    assert run(gate("What is an error budget?")) is True
+    assert run(gate("Thanks!")) is False
+
+
+def test_planner_always_returns_a_sub_query_for_a_message_the_gate_passed():
+    for q in ("explain that more simply", "what about the second one?"):
+        p = run(plan(q, HEAP_CHAT))
+        print(f"\n{q!r} -> {p}")
+        assert p.sub_queries, f"planner returned no sub-queries for {q!r}"
 
 
 def test_this_year_means_the_current_year():

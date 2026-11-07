@@ -22,8 +22,20 @@ def retrieval_top_k() -> int:
 
 
 def planner_model() -> str:
-    # ADR-0007: one fused rewrite-and-split call to a small, fast model.
-    return os.environ.get("PLANNER_MODEL", "gpt-4.1-mini")
+    # The decomposition agent (ADR-0007's fused rewrite-and-split call), upgraded
+    # from gpt-4.1-mini: it only runs once the gate has said a search is needed.
+    return os.environ.get("PLANNER_MODEL", "gpt-5.4")
+
+
+def needs_search_model() -> str:
+    # The needs-search gate: one yes/no routing decision per message, so small and fast.
+    return os.environ.get("NEEDS_SEARCH_MODEL", "gpt-5.4-mini")
+
+
+def plan_reasoning_effort() -> str:
+    # Both planning agents are routing/rewriting calls, not reasoning tasks: "none"
+    # keeps them fast. (These models accept "none" and "low", not "minimal".)
+    return os.environ.get("PLAN_REASONING_EFFORT", "none")
 
 
 def rerank_model() -> str:

@@ -22,15 +22,29 @@ Given the conversation so far and the user's new message, return JSON:
 Rules:
 - Resolve follow-ups ("that", "explain it more simply") into the actual topic from the conversation.
 - Relative dates ("this year", "last month") are relative to today's date given below.
-- Return 0 sub_queries ("sub_queries": []) only for thanks, greetings, acknowledgements, or a pure
-  layout change of the previous answer: "put that in a table/list/bullets", "make it shorter", "translate it".
-  Example: after an answer about heaps, "put that in a table" -> {"standalone": "Put the previous answer about heaps in a table.", "sub_queries": []}.
-- Requests to explain, simplify, elaborate on, or give examples of an earlier topic DO search: the
-  sub-queries target that resolved topic.
+- Always return at least one sub-query: a separate step has already decided this message needs a search.
+- Requests to explain, simplify, elaborate on, or give examples of an earlier topic are searches about
+  that resolved topic.
   Example: after an answer about error budgets, "explain that more simply" -> {"standalone": "Explain error budgets more simply.", "sub_queries": ["error budget definition"]}.
 - Split a question with independent parts (e.g. about two different documents) into one sub-query per part.
 - Never return near-duplicate sub-queries; at most 3.
 - Sub-queries are short keyword-rich search phrases, not full sentences."""
+
+
+GATE_PROMPT = """You decide whether a message to a study assistant needs a NEW search of the user's documents.
+Given the conversation so far and the user's new message, return JSON: {"needs_search": true} or {"needs_search": false}.
+
+needs_search is false ONLY when the message can be handled from the conversation alone:
+- thanks, greetings, acknowledgements ("thanks!", "ok", "got it")
+- a mechanical reformat of an earlier answer that adds no new content: "put that in a table/list/bullets", "make it shorter", "translate it"
+- questions about the conversation itself ("what did you just say?", "summarize our chat")
+
+needs_search is true for everything else, including:
+- any request to EXPLAIN, SIMPLIFY, ELABORATE ON, or give an EXAMPLE of something, even when it refers to an earlier answer
+  ("explain that more simply", "give me an example", "can you elaborate?", "what about the second one?"): these need fresh
+  excerpts so the new answer is grounded and cited, not just a rewording
+- any question asking for information
+- anything you are unsure about. When in doubt, search."""
 
 
 @dataclass
@@ -39,6 +53,7 @@ class Plan:
     sub_queries: list[str]
     degraded: bool = False
     notes: list[str] = field(default_factory=list)  # why it degraded, for the log
+    gate: str = "off"  # off (no gate) | search | skip | failed — for the log
 
     def event(self) -> dict:
         return {"type": "plan", "standalone": self.standalone, "sub_queries": self.sub_queries, "degraded": self.degraded}
@@ -60,6 +75,24 @@ def planner_messages(question: str, history: list, titles: list[str], today: dt.
             f"Conversation so far:\n{convo}\n\nNew message: {question}",
         },
     ]
+
+
+def gate_messages(question: str, history: list) -> list[dict]:
+    recent = history[-RECENT_MESSAGES:]
+    convo = "\n".join(f"{m.role}: {m.content[:MESSAGE_CHARS]}" for m in recent) or "(none)"
+    return [
+        {"role": "system", "content": GATE_PROMPT},
+        {"role": "user", "content": f"Conversation so far:\n{convo}\n\nNew message: {question}"},
+    ]
+
+
+def parse_gate(text: str) -> bool:
+    """True = needs a search. Raises ValueError unless the reply is exactly a JSON
+    object with a boolean `needs_search`: anything else must not be read as "skip"."""
+    data = json.loads(text)
+    if not isinstance(data, dict) or not isinstance(data.get("needs_search"), bool):
+        raise ValueError("gate JSON missing a boolean needs_search")
+    return data["needs_search"]
 
 
 def parse_plan(text: str) -> Plan:

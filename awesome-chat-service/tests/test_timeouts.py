@@ -121,3 +121,77 @@ def test_rerank_calls_run_on_the_given_bounded_executor(monkeypatch):
 
     assert asyncio.run(rerank("q", ["a"])) == [0]
     assert seen["thread"].startswith("bounded-search")
+
+
+# --- The two planning agents: models, parameters, wiring (gate + planner follow-up) ---
+
+
+def _recording_client(monkeypatch):
+    import generate
+
+    seen = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            seen.update(kwargs)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="{}"))])
+
+    monkeypatch.setattr(
+        generate, "_client", types.SimpleNamespace(chat=types.SimpleNamespace(completions=FakeCompletions()))
+    )
+    return seen
+
+
+def test_the_models_default_to_gpt_5_4_for_decomposition_and_5_4_mini_for_the_gate(monkeypatch):
+    monkeypatch.delenv("PLANNER_MODEL", raising=False)
+    monkeypatch.delenv("NEEDS_SEARCH_MODEL", raising=False)
+    import config
+
+    assert config.planner_model() == "gpt-5.4"
+    assert config.needs_search_model() == "gpt-5.4-mini"
+
+
+def test_the_gate_call_uses_its_own_model_json_mode_no_reasoning_and_the_short_timeout(monkeypatch):
+    import asyncio
+
+    import generate
+
+    seen = _recording_client(monkeypatch)
+    monkeypatch.delenv("NEEDS_SEARCH_MODEL", raising=False)
+    monkeypatch.setenv("CHAT_UPSTREAM_TIMEOUT_S", "12")
+
+    asyncio.run(generate.needs_search_fn([{"role": "user", "content": "x"}]))
+
+    assert seen["model"] == "gpt-5.4-mini"
+    assert seen["response_format"] == {"type": "json_object"}
+    assert seen["reasoning_effort"] == "none"  # a yes/no routing call shouldn't think
+    assert seen["timeout"] == 12.0
+
+
+def test_the_planner_call_uses_gpt_5_4_without_reasoning(monkeypatch):
+    import asyncio
+
+    import generate
+
+    seen = _recording_client(monkeypatch)
+    monkeypatch.delenv("PLANNER_MODEL", raising=False)
+
+    asyncio.run(generate.plan_fn([{"role": "user", "content": "x"}]))
+
+    assert seen["model"] == "gpt-5.4"
+    assert seen["reasoning_effort"] == "none"
+
+
+def test_turn_deps_wires_the_gate_and_the_planner(monkeypatch):
+    import generate
+    import main
+
+    monkeypatch.setattr(main, "qdrant_client", lambda: object())
+    monkeypatch.setattr(main, "create_embedder", lambda **kw: object())
+    monkeypatch.setattr(main, "create_sparse_embedder", lambda: object())
+    monkeypatch.setattr(main, "create_reranker", lambda **kw: object())
+
+    deps = main.turn_deps.__wrapped__()  # bypass @cache
+
+    assert deps.needs_search_fn is generate.needs_search_fn
+    assert deps.plan_fn is generate.plan_fn

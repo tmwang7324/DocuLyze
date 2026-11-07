@@ -11,7 +11,7 @@ from retrieval.embedding import create_embedder, create_sparse_embedder
 from retrieval.vector_store import qdrant_client
 
 from config import retrieval_top_k, search_concurrency, upstream_timeout_s
-from generate import generate_fn, plan_fn
+from generate import generate_fn, needs_search_fn, plan_fn
 from rerank import create_reranker
 from turn import ChatRequest, TurnDeps, run_turn
 
@@ -32,6 +32,7 @@ def turn_deps() -> TurnDeps:
         generate_fn=generate_fn,
         top_k=retrieval_top_k(),
         plan_fn=plan_fn,
+        needs_search_fn=needs_search_fn,
         rerank_fn=create_reranker(executor=pool),
         search_executor=pool,
     )

@@ -15,7 +15,9 @@ from config import (
     chat_model,
     chat_reasoning_effort,
     generation_timeout_s,
+    needs_search_model,
     openai_api_key,
+    plan_reasoning_effort,
     planner_model,
     upstream_timeout_s,
 )
@@ -64,7 +66,22 @@ async def plan_fn(messages: list[dict]) -> str:
         model=planner_model(),
         messages=messages,
         response_format={"type": "json_object"},
+        reasoning_effort=plan_reasoning_effort(),
         temperature=0,
         timeout=upstream_timeout_s(),  # a slow planner degrades the Turn; it must not stall it
+    )
+    return response.choices[0].message.content or ""
+
+
+async def needs_search_fn(messages: list[dict]) -> str:
+    """The needs-search gate: returns JSON text {"needs_search": bool}. Parsing and
+    the fail-toward-search fallback live in make_plan, so this stays a thin boundary."""
+    response = await _openai().chat.completions.create(
+        model=needs_search_model(),
+        messages=messages,
+        response_format={"type": "json_object"},
+        reasoning_effort=plan_reasoning_effort(),
+        temperature=0,
+        timeout=upstream_timeout_s(),  # a slow gate falls back to searching; it must not stall the Turn
     )
     return response.choices[0].message.content or ""
