@@ -4,7 +4,7 @@ import math
 import time
 
 
-def google_cases(source, labels, corpus=None):
+def google_cases(source, labels, corpus=None, corrections=None):
     if not labels.get("corpus_version") or not labels.get("chunker_version"):
         raise ValueError("Corpus and chunker versions are required")
     corpus_lookup = {(chunk["document"], chunk["chunk_index"]): chunk["content"] for chunk in corpus} if corpus is not None else None
@@ -32,9 +32,14 @@ def google_cases(source, labels, corpus=None):
             mapping[key] = chunk["passage_ids"]
         if not mapping or set().union(*map(set, mapping.values())) != set(ids):
             raise ValueError(f"Incomplete mapping for {question['id']}")
+        correction = (corrections or {}).get(question["id"], {})
+        original_answer = question.get("ground_truth_answer")
         cases.append({"id": question["id"], "question": question["question"],
                       "reference_passages": ids, "reference_data": passages,
-                      "reference_answer": question.get("ground_truth_answer"),
+                      "reference_answer": None if correction else original_answer,
+                      "original_reference_answer": original_answer,
+                      "proposed_reference_answer": correction.get("reference_answer"),
+                      "reference_correction_reason": correction.get("reason"),
                       "reviewed_by": label["reviewed_by"], "mapping": mapping})
     return cases
 
@@ -77,6 +82,9 @@ def run_case(case, retrieve, config):
                       "all_evidence": recall == 1.0, "ndcg": dcg / ideal if ideal else 0.0}
     return {"id": case["id"], "config": config, "ranked_chunks": chunks,
             "reference_data": case.get("reference_data"), "reference_answer": case.get("reference_answer"),
+            "original_reference_answer": case.get("original_reference_answer"),
+            "proposed_reference_answer": case.get("proposed_reference_answer"),
+            "reference_correction_reason": case.get("reference_correction_reason"),
             "reviewed_by": case.get("reviewed_by"),
             "returned_chunks": len(chunks), "latency_seconds": time.monotonic() - start,
             "metrics": metrics, "error": None}

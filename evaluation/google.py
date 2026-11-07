@@ -10,6 +10,7 @@ from evaluation.benchmark import google_cases, run_suite
 
 ROOT = Path(__file__).resolve().parents[1]
 QUESTIONS = ROOT / "ingest-worker" / "experimental_results" / "sample_q&a" / "google_questions.json"
+CORRECTIONS = ROOT / "evaluation" / "google_corrections.json"
 LOG = logging.getLogger("evaluation.google")
 
 
@@ -63,7 +64,8 @@ def main():
     from evaluation.corpus import load_google_chunks
     corpus = load_google_chunks(json.loads(QUESTIONS.read_text(encoding="utf-8")),
                                 ROOT / "ingest-worker" / "experimental_results" / "chunks")
-    cases = google_cases(source, labels, corpus)
+    corrections = json.loads(CORRECTIONS.read_text(encoding="utf-8"))
+    cases = google_cases(source, labels, corpus, corrections)
 
     sys.path.insert(0, str(ROOT / "ingest-worker" / "src"))
     from ingest.mytests.eval_support import connect, create_dense_embedder, query_dense

@@ -1,0 +1,14 @@
+{
+  "goog-q1-001a": {
+    "reference_answer": "Investor relations: investor-relations@abc.xyz. Media/press: press@abc.xyz.",
+    "reason": "The labeled release gives email addresses; the labeled passages do not establish a contact form. Legacy chunks 5 and 6 do not contain contact details."
+  },
+  "goog-q1-024": {
+    "reference_answer": "Investment indicators include capital expenditure of $35.7B, up from $17.2B; Alphabet-level activities primarily related to shared AI research and development of $5.4B, up from $3.0B; and total R&D expense of $17.0B, up from $13.6B. The report also describes business indicators including Google Cloud revenue growth of 63% to $20B and backlog over $460B, more than 16B Gemini API tokens per minute, 40% quarterly growth in Gemini Enterprise paid monthly active users, and 19% growth in Search revenue. These are indicators associated with AI investment, not proof that all these changes were caused by it. Google reported 350M paid subscriptions overall and named YouTube and Google One as the key drivers.",
+    "reason": "The original answer treats all subscriptions as AI-driven and speculates that acquisitions included AI targets; the labeled evidence does not establish either claim."
+  },
+  "goog-q1-025": {
+    "reference_answer": "Total assets grew from $595.3B to $703.9B, an increase of $108.6B. Property and equipment rose by $34.4B to $281.0B; non-marketable securities rose by $38.3B to $106.9B; goodwill rose by $24.4B to $57.8B; and intangible assets rose by $8.2B to $9.4B. Long-term debt increased by $31.0B to $77.5B, and total liabilities increased by $45.2B. Stockholders' equity increased by $63.5B to $478.7B. Cash flows include $35.7B in property and equipment purchases, $33.6B in acquisitions net of cash acquired and purchases of intangible assets, $31.4B in debt proceeds net of costs, and $2.5B in dividend payments. Net income was $62.6B.",
+    "reason": "The cash-flow line combines acquisitions and intangible-asset purchases. The statements also do not establish that the $3.8B increase in the stock-and-paid-in-capital line was all new paid-in capital."
+  }
+}

@@ -103,6 +103,20 @@ def test_google_import_requires_reviewed_versioned_reference_passages():
         google_cases(source, labels, [{"document": "a.pdf", "chunk_index": 0, "content": "wrong"}])
 
 
+def test_google_corrections_preserve_original_answer_and_explain_revision():
+    source = {"questions": [{"id": "g1", "question": "q", "ground_truth_answer": "old"}]}
+    labels = {"corpus_version": "v1", "chunker_version": "v1", "cases": {
+        "g1": {"reviewed_by": "owner", "reference_passages": [{"id": "a", "text": "evidence"}],
+               "chunks": [{"document": "a.pdf", "chunk_index": 0, "passage_ids": ["a"]}]}}}
+    corrections = {"g1": {"reference_answer": "corrected", "reason": "verified"}}
+    case = google_cases(source, labels, corrections=corrections)[0]
+    assert case["reference_answer"] is None
+    assert case["proposed_reference_answer"] == "corrected"
+    assert case["original_reference_answer"] == "old"
+    assert case["reference_correction_reason"] == "verified"
+    assert source["questions"][0]["ground_truth_answer"] == "old"
+
+
 def test_cli_refuses_network_without_explicit_live_flag():
     result = subprocess.run([sys.executable, "-m", "evaluation.google", "--labels", "missing.json"],
                             capture_output=True, text=True)

@@ -19,6 +19,11 @@ mapping, reviewed by a human, containing the original evidence text and its
 mapping to chunks. Do not treat historical chunk indices or automatically
 generated proposals as reviewed evidence. The required shape is:
 
+The tracked `google_corrections.json` records proposed reference-answer
+corrections and reasons without altering the original dataset. Evaluation output
+includes the proposed and original answer, but leaves the effective reference
+answer empty until a correction has been reviewed by a human.
+
 Generate a starting file with `python -m evaluation.corpus --propose
 evaluation/results/google-proposed-labels.json`. It contains the historical
 chunk text and labels as unreviewed proposals, not verified Reference Passages.
