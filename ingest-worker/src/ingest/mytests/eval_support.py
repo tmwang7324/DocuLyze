@@ -37,7 +37,9 @@ def connect():
 
 
 def recreate_collection(client, name: str, keyword_fields=("userId", "docId")) -> None:
-    """Drop and recreate `name` with dense + sparse vectors and keyword indexes."""
+    """Create an evaluation collection, refusing to delete an existing one."""
+    if name not in {"uda_eval_chunks", "eval_reranker", "google_eval_chunks"}:
+        raise ValueError("Collection must be a designated evaluation collection")
     from qdrant_client.models import (
         Distance,
         Modifier,
@@ -47,7 +49,7 @@ def recreate_collection(client, name: str, keyword_fields=("userId", "docId")) -
     )
 
     if client.collection_exists(name):
-        client.delete_collection(name)
+        raise ValueError(f"Evaluation collection {name!r} already exists; refusing to delete it")
     client.create_collection(
         collection_name=name,
         vectors_config={"dense": VectorParams(size=embedding_dim(), distance=Distance.COSINE)},
