@@ -3,7 +3,8 @@
     "origin": [
       "http://localhost:3000",
       "https://doculyze.web.app",
-      "https://doculyze.firebaseapp.com"
+      "https://doculyze.firebaseapp.com",
+      "https://web-production-9b2382.up.railway.app"
     ],
     "method": ["PUT"],
     "responseHeader": [

@@ -12,6 +12,7 @@ Env vars honored by the underlying SDKs (never baked into the image):
 """
 
 import logging
+import json
 import os
 
 log = logging.getLogger("ingest")
@@ -102,7 +103,7 @@ def lease_ttl_s() -> int:
 def firebase_app():
     """Initialize firebase_admin exactly once and return the app.
 
-    Credentials come from GOOGLE_APPLICATION_CREDENTIALS (mounted, not baked).
+    Credentials come from FIREBASE_SERVICE_ACCOUNT_JSON or application defaults.
     The boot log names which Firestore this process talks to so a mis-wired
     environment is visible in the first log lines.
     """
@@ -112,9 +113,10 @@ def firebase_app():
         from firebase_admin import credentials
 
         bucket = os.environ["FIREBASE_STORAGE_BUCKET"]  # required; fail loudly
-        _app = firebase_admin.initialize_app(
-            credentials.ApplicationDefault(), {"storageBucket": bucket}
-        )
+        service_account = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        credential = (credentials.Certificate(json.loads(service_account)) if service_account
+                      else credentials.ApplicationDefault())
+        _app = firebase_admin.initialize_app(credential, {"storageBucket": bucket})
         log.info(
             "firebase initialized: firestore=%s storage=%s bucket=%s",
             os.environ.get("FIRESTORE_EMULATOR_HOST") or "REAL",

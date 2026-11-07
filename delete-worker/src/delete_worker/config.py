@@ -1,6 +1,7 @@
 """Environment-driven broker, Firebase, and Storage configuration."""
 
 import logging
+import json
 import os
 
 log = logging.getLogger("delete-worker")
@@ -16,16 +17,17 @@ def delete_queue() -> str:
 
 
 def firebase_app():
-    """Initialize Firebase Admin exactly once using mounted credentials."""
+    """Initialize Firebase Admin exactly once using environment or default credentials."""
     global _app
     if _app is None:
         import firebase_admin
         from firebase_admin import credentials
 
         bucket = os.environ["FIREBASE_STORAGE_BUCKET"]
-        _app = firebase_admin.initialize_app(
-            credentials.ApplicationDefault(), {"storageBucket": bucket}
-        )
+        service_account = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        credential = (credentials.Certificate(json.loads(service_account)) if service_account
+                      else credentials.ApplicationDefault())
+        _app = firebase_admin.initialize_app(credential, {"storageBucket": bucket})
         log.info(
             "firebase initialized: firestore=%s storage=%s bucket=%s",
             os.environ.get("FIRESTORE_EMULATOR_HOST") or "REAL",
