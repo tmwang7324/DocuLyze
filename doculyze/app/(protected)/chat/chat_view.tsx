@@ -117,7 +117,13 @@ export default function ChatView({
                                     : "bg-orange-pale text-dark rounded-2xl px-4 py-2 max-w-[80%] whitespace-pre-wrap"
                             }
                         >
-                            {m.content || (m.status === "streaming" ? "…" : "")}
+                            {m.content || (m.status === "streaming" ? (
+                                <span role="status" aria-label="Waiting for answer" className="inline-flex gap-1 items-center h-5 text-orange-primary">
+                                    {[0, 150, 300].map((delay) => (
+                                        <span key={delay} className="chat-float-dot" style={{ animationDelay: `${delay}ms` }} />
+                                    ))}
+                                </span>
+                            ) : "")}
                             {m.status === "stopped" && (
                                 <div className="text-xs text-muted mt-1">Stopped</div>
                             )}

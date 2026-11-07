@@ -5,11 +5,11 @@ import os
 
 
 def chat_model() -> str:
-    return os.environ.get("CHAT_MODEL", "gpt-5")
+    return os.environ.get("CHAT_MODEL", "gpt-5-mini")
 
 
 def chat_reasoning_effort() -> str:
-    # gpt-5 reasons before its first token; "low" keeps time-to-first-token short.
+    # gpt-5-mini reasons before its first token; "low" keeps time-to-first-token short.
     return os.environ.get("CHAT_REASONING_EFFORT", "low")
 
 

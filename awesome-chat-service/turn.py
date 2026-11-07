@@ -1,7 +1,7 @@
 """`run_turn(request, deps)` — one Turn as a stream of events (ADR-0006).
 
 Tracer version (chat ticket 02): the Retrieval Plan is a pass-through (the raw
-question is the only Sub-query) → hybrid search over the user's Scope → gpt-5.
+question is the only Sub-query) → hybrid search over the user's Scope → gpt-5-mini.
 
 Events, in order:
     {"type": "token", "text": "..."}   zero or more
