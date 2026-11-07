@@ -1,13 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createSseParser } from "@/_lib/chat_events";
+import { createSseParser, type AnswerMode, type RetrievalPlan, type Source } from "@/_lib/chat_events";
+import { answerBadge } from "@/_lib/answer_mode";
+import { setAnswerMode } from "@/app/actions/chat/set_answer_mode";
+import { resolveOpenSource, type OpenCitation } from "@/_lib/citations";
+import AnswerBody from "./answer_body";
 
 type ViewMessage = {
     role: "user" | "assistant";
     content: string;
     status?: "complete" | "stopped" | "failed" | "streaming";
     error?: string;
+    sources?: Source[];
+    plan?: RetrievalPlan;
+    answerMode?: AnswerMode;
+    route?: string;
 };
 
 // Minimal chat: a message list and a chat bar. The question goes out as a POST
@@ -16,14 +24,20 @@ type ViewMessage = {
 export default function ChatView({
     conversationId: initialConversationId,
     initialMessages,
+    initialAnswerMode,
 }: {
     conversationId: string | null;
     initialMessages: ViewMessage[];
+    initialAnswerMode: AnswerMode;
 }) {
+    const [answerMode, setMode] = useState<AnswerMode>(initialAnswerMode);
+    const [modeError, setModeError] = useState<string | null>(null);
     const [messages, setMessages] = useState<ViewMessage[]>(initialMessages);
     const [input, setInput] = useState("");
     const [streaming, setStreaming] = useState(false);
     const [health, setHealth] = useState<"checking" | "available" | "unavailable">("checking");
+    const [openCitation, setOpenCitation] = useState<OpenCitation | null>(null);
+    const openSource = resolveOpenSource(messages, openCitation);
     const conversationId = useRef(initialConversationId);
     const abort = useRef<AbortController | null>(null);
 
@@ -46,6 +60,23 @@ export default function ChatView({
     const updateLast = (fn: (m: ViewMessage) => ViewMessage) =>
         setMessages((prev) => [...prev.slice(0, -1), fn(prev[prev.length - 1])]);
 
+    // Before the first message there is no Conversation to update: the choice just
+    // rides along with the first POST. After that, the server action owns it.
+    async function toggleMode(open: boolean) {
+        const next: AnswerMode = open ? "open" : "grounded";
+        const previous = answerMode;
+        setMode(next);
+        setModeError(null);
+        if (!conversationId.current) return;
+        try {
+            await setAnswerMode(conversationId.current, next);
+        } catch (error) {
+            console.error("[chat] Failed to change the answer mode", error);
+            setMode(previous);
+            setModeError("Couldn't change the answer mode. Try again.");
+        }
+    }
+
     async function send() {
         const question = input.trim();
         if (!question || streaming || health !== "available") return;
@@ -63,7 +94,7 @@ export default function ChatView({
             const res = await fetch("/api/awesome-chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ question, conversationId: conversationId.current ?? undefined }),
+                body: JSON.stringify({ question, conversationId: conversationId.current ?? undefined, answerMode }),
                 signal: controller.signal,
             });
             if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -75,7 +106,11 @@ export default function ChatView({
             }
 
             const parse = createSseParser((event) => {
-                if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
+                if (event.type === "meta") updateLast((m) => ({ ...m, answerMode: event.answerMode, route: event.route }));
+                else if (event.type === "plan")
+                    updateLast((m) => ({ ...m, plan: { standalone: event.standalone, sub_queries: event.sub_queries, degraded: event.degraded } }));
+                else if (event.type === "sources") updateLast((m) => ({ ...m, sources: event.sources }));
+                else if (event.type === "token") updateLast((m) => ({ ...m, content: m.content + event.text }));
                 else if (event.type === "done") updateLast((m) => ({ ...m, status: "complete" }));
                 else if (event.type === "error") {
                     console.error("[chat] Stream error:", event.message);
@@ -103,7 +138,22 @@ export default function ChatView({
     }
 
     return (
-        <div className="flex flex-col h-[calc(100vh-4rem)] max-w-3xl mx-auto px-4">
+        <div className="flex h-[calc(100vh-4rem)]">
+        <div className="flex flex-col flex-1 min-w-0 max-w-3xl mx-auto px-4">
+            <div className="flex items-center justify-between gap-3 py-3 border-b border-hairline text-sm">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                        type="checkbox"
+                        checked={answerMode === "open"}
+                        disabled={streaming}
+                        onChange={(e) => void toggleMode(e.target.checked)}
+                    />
+                    Allow general knowledge
+                </label>
+                <span className="text-muted">
+                    {modeError ?? (answerMode === "open" ? "Mode: documents + general knowledge" : "Mode: documents only")}
+                </span>
+            </div>
             <div className="flex-1 overflow-y-auto py-8 space-y-4">
                 {messages.length === 0 && (
                     <p className="text-muted text-center mt-24">Ask a question about your documents.</p>
@@ -117,13 +167,38 @@ export default function ChatView({
                                     : "bg-orange-pale text-dark rounded-2xl px-4 py-2 max-w-[80%] whitespace-pre-wrap"
                             }
                         >
-                            {m.content || (m.status === "streaming" ? (
+                            {m.role === "assistant" && m.plan && (
+                                <details className="mb-2 text-xs text-muted">
+                                    <summary className="cursor-pointer select-none">
+                                        {m.plan.sub_queries.length
+                                            ? `Searched for: ${m.plan.sub_queries.join(" · ")}`
+                                            : "No document search needed"}
+                                    </summary>
+                                    <div className="mt-1 pl-3">
+                                        Understood as: {m.plan.standalone}
+                                        {m.plan.degraded && <div className="mt-1">Search planning fell back to a simpler mode for this answer.</div>}
+                                    </div>
+                                </details>
+                            )}
+                            {m.role === "assistant" && m.content ? (
+                                <AnswerBody
+                                    content={m.content}
+                                    sources={m.sources ?? []}
+                                    openN={openCitation?.messageIndex === i ? openCitation.n : null}
+                                    onToggle={(n) => setOpenCitation(openCitation?.messageIndex === i && openCitation.n === n ? null : { messageIndex: i, n })}
+                                />
+                            ) : m.content || (m.status === "streaming" ? (
                                 <span role="status" aria-label="Waiting for answer" className="inline-flex gap-1 items-center h-5 text-orange-primary">
                                     {[0, 150, 300].map((delay) => (
                                         <span key={delay} className="chat-float-dot" style={{ animationDelay: `${delay}ms` }} />
                                     ))}
                                 </span>
                             ) : "")}
+                            {m.role === "assistant" && m.content && answerBadge(m) && (
+                                <div className="mt-2 inline-block rounded-full bg-hairline px-2 py-0.5 text-[11px] font-medium text-muted">
+                                    {answerBadge(m)}
+                                </div>
+                            )}
                             {m.status === "stopped" && (
                                 <div className="text-xs text-muted mt-1">Stopped</div>
                             )}
@@ -174,6 +249,19 @@ export default function ChatView({
                     </button>
                 )}
             </form>
+        </div>
+        {openSource && (
+            <aside aria-label={`Source ${openSource.n}`} className="w-96 shrink-0 border-l border-hairline bg-off-white p-5 overflow-y-auto">
+                <div className="flex items-start justify-between gap-2">
+                    <div>
+                        <div className="font-semibold text-dark">[{openSource.n}] {openSource.file_name}</div>
+                        {openSource.section && <div className="text-xs text-muted mt-0.5">{openSource.section}</div>}
+                    </div>
+                    <button type="button" aria-label="Close source" className="text-muted hover:text-dark text-lg leading-none" onClick={() => setOpenCitation(null)}>×</button>
+                </div>
+                <div className="mt-4 text-sm text-dark whitespace-pre-wrap">{openSource.text}</div>
+            </aside>
+        )}
         </div>
     );
 }

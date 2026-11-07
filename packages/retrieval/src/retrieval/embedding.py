@@ -18,11 +18,16 @@ from retrieval.config import embedding_model, voyage_api_key
 log = logging.getLogger("retrieval")
 
 
-def create_embedder_voyage():
-    """Return an embed_fn bound to the configured model and API key."""
+def create_embedder_voyage(timeout: float | None = None):
+    """Return an embed_fn bound to the configured model and API key.
+
+    `timeout` (seconds) is passed to the Voyage client only when given: the chat
+    service sets one so a stuck call can't hold a search thread forever; the
+    ingest worker keeps the SDK default."""
     import voyageai
 
-    client = voyageai.Client(api_key=voyage_api_key())
+    client_kwargs = {} if timeout is None else {"timeout": timeout}
+    client = voyageai.Client(api_key=voyage_api_key(), **client_kwargs)
     model = embedding_model()
     log.info("embedder created: model=%s", model)
 
@@ -46,14 +51,14 @@ def create_embedder_bge():
     return
 
 
-def create_embedder():
+def create_embedder(timeout: float | None = None):
     """The embedder job.py actually calls — currently always Voyage.
 
     A second provider (BGE, local/offline) is a real future direction but
     create_embedder_bge() above is an unfinished stub; wiring provider choice
     through here (e.g. by embedding_model()'s value) is a separate migration.
     """
-    return create_embedder_voyage()
+    return create_embedder_voyage(timeout=timeout)
 
 
 # --- Qdrant migration: sparse (BM25) embedder, alongside the dense one above ---

@@ -1,14 +1,16 @@
 import "server-only";
 import { z } from "zod";
 import { getCurrentUid } from "@/_lib/data";
-import { createSseParser, sseFrame } from "@/_lib/chat_events";
+import { ANSWER_MODES, createSseParser, sseFrame, type AnswerMode, type RetrievalPlan, type Route, type Source } from "@/_lib/chat_events";
 import {
   appendAssistantMessage,
   appendUserMessage,
-  conversationExists,
   createConversation,
+  listReadyDocuments,
+  readAnswerMode,
   readHistory,
   type MessageStatus,
+  type ReplyExtras,
 } from "@/_lib/conversations";
 import { logOperationalEvent } from "@/_lib/operational_logger";
 
@@ -37,6 +39,8 @@ const KEEPALIVE_MS = 15_000; // SSE comments defeat proxy idle timeouts
 const ChatBody = z.object({
   question: z.string().trim().min(1).max(32_000),
   conversationId: z.string().min(1).max(128).optional(),
+  // Only used to create a new Conversation; an existing one keeps its stored mode.
+  answerMode: z.enum(ANSWER_MODES).optional(),
 });
 
 function chatServiceUrl(): string {
@@ -70,12 +74,21 @@ export async function POST(req: Request) {
   }
   const { question } = parsed.data;
 
-  if (parsed.data.conversationId && !(await conversationExists(uid, parsed.data.conversationId))) {
-    return new Response("Not found", { status: 404 });
+  // The server holds the mode: an existing Conversation's mode is read from
+  // Firestore on every Turn, so nothing in the request can change it.
+  let answerMode: AnswerMode;
+  let conversationId: string;
+  if (parsed.data.conversationId) {
+    const stored = await readAnswerMode(uid, parsed.data.conversationId);
+    if (!stored) return new Response("Not found", { status: 404 });
+    answerMode = stored;
+    conversationId = parsed.data.conversationId;
+  } else {
+    answerMode = parsed.data.answerMode ?? "grounded";
+    conversationId = await createConversation(uid, question, answerMode);
   }
-  const conversationId = parsed.data.conversationId ?? (await createConversation(uid, question));
 
-  const history = await readHistory(uid, conversationId);
+  const [history, documents] = await Promise.all([readHistory(uid, conversationId), listReadyDocuments(uid)]);
   // Started now, awaited only when the reply is written: the user Message write
   // runs in parallel with the chat-service call, never ahead of the first token.
   const userSeq = appendUserMessage(uid, conversationId, question);
@@ -102,6 +115,10 @@ export async function POST(req: Request) {
 
       const relay = async () => {
         let text = "";
+        let sources: Source[] = [];
+        let plan: RetrievalPlan | undefined;
+        let route: Route | undefined;
+        let answeredIn: AnswerMode | undefined;
         let outcome = "failed" as MessageStatus;
         try {
           const res = await fetch(`${chatServiceUrl()}/awesome-chat`, {
@@ -111,6 +128,8 @@ export async function POST(req: Request) {
               uid,
               question,
               history: history.map(({ role, content }) => ({ role, content })),
+              documents,
+              answer_mode: answerMode,
             }),
             signal: upstream.signal,
           });
@@ -118,7 +137,14 @@ export async function POST(req: Request) {
             throw new Error(`chat service responded ${res.status}`);
           }
           const parse = createSseParser((event) => {
-            if (event.type === "token") text += event.text;
+            if (event.type === "plan") {
+              plan = { standalone: event.standalone, sub_queries: event.sub_queries, degraded: event.degraded };
+              if (event.degraded) console.warn("[chat] Retrieval plan degraded (planner or rerank fell back; see chat-service log)");
+            } else if (event.type === "meta") {
+              route = event.route;
+              answeredIn = event.answerMode;
+            } else if (event.type === "sources") sources = event.sources;
+            else if (event.type === "token") text += event.text;
             else if (event.type === "done") outcome = "complete";
             else if (event.type === "error") console.error("[chat] Chat service stream error:", event.message);
             send(sseFrame(event));
@@ -142,7 +168,7 @@ export async function POST(req: Request) {
           if (upstream.signal.aborted && outcome !== "complete") outcome = "stopped";
           clearInterval(keepalive);
           req.signal.removeEventListener("abort", stop);
-          await persistReply(text, outcome);
+          await persistReply(text, outcome, { sources, plan, route, answerMode: answeredIn });
           if (open) {
             open = false;
             try {
@@ -156,16 +182,22 @@ export async function POST(req: Request) {
 
       // The reply is written whether or not anyone is still reading: a Stopped
       // answer keeps the partial text the user saw; a failed one keeps nothing.
-      const persistReply = async (text: string, outcome: MessageStatus) => {
+      const persistReply = async (text: string, outcome: MessageStatus, { sources = [], plan, route, answerMode: answeredIn }: ReplyExtras) => {
         try {
           const seq = await userSeq;
-          await appendAssistantMessage(uid, conversationId, seq + 1, outcome === "failed" ? "" : text, outcome);
+          const failed = outcome === "failed";
+          await appendAssistantMessage(uid, conversationId, seq + 1, failed ? "" : text, outcome, failed ? {} : { sources, plan, route, answerMode: answeredIn });
           logOperationalEvent(outcome === "failed" ? "error" : "info", {
             operation: "chatTurn",
             lifecycle: outcome,
             durationMs: Date.now() - startedAt,
             userId: uid,
             conversationId,
+            sourceCount: failed ? 0 : sources.length,
+            subQueryCount: plan?.sub_queries.length ?? 0,
+            planDegraded: plan?.degraded ?? false,
+            answerMode,
+            route: route ?? "none",
           });
         } catch (error) {
           console.error("[chat] Failed to save the assistant message", error);

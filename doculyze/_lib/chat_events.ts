@@ -4,7 +4,25 @@
 // the chat service's stream with it, and the chat page parses the route's
 // stream with it, so both ends of each hop agree on one framing.
 
+// A numbered passage the answer may cite as [n]. Snapshotted on the assistant
+// Message, so the citation outlives a re-ingest or delete of its document.
+export type Source = { n: number; doc_id: string; file_name: string; section: string; text: string };
+
+// What the Turn searched for (ticket 03): the standalone rewrite and 0–3
+// Sub-queries. `degraded` means the planner or reranker fell back.
+export type RetrievalPlan = { standalone: string; sub_queries: string[]; degraded: boolean };
+
+// grounded: answers come only from the user's documents. open: the model may add
+// general knowledge, clearly labelled. A per-Conversation setting owned by Next.
+export const ANSWER_MODES = ["grounded", "open"] as const;
+export type AnswerMode = (typeof ANSWER_MODES)[number];
+// Phase 1 only ever routes to "retrieve"; the router adds the rest.
+export type Route = "retrieve";
+
 export type ChatEvent =
+    | ({ type: "plan" } & RetrievalPlan)
+    | { type: "meta"; route: Route; answerMode: AnswerMode }
+    | { type: "sources"; sources: Source[] }
     | { type: "token"; text: string }
     | { type: "done" }
     | { type: "error"; message: string };

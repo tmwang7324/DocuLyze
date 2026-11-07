@@ -20,6 +20,7 @@ const OPERATION_CATEGORIES = {
   createRefresh: "server-action",
   revokeSession: "server-action",
   chatTurn: "server-action",
+  setAnswerMode: "server-action",
   validateUploadClaim: "intermediate function",
   publishIngestJob: "intermediate function",
   publishDeleteJob: "intermediate function",

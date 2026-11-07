@@ -4,7 +4,7 @@ import asyncio
 
 from conftest import fake_embedder, fake_sparse_embedder
 
-from turn import ChatRequest, Message, TurnDeps, run_turn
+from turn import ChatRequest, DocRef, Message, TurnDeps, run_turn
 
 
 class FakeGenerate:
@@ -35,19 +35,29 @@ def deps(qdrant, generate) -> TurnDeps:
 
 
 def collect(request, d) -> list[dict]:
+    """The events after the plan (asserted on here as the pass-through plan; the
+    planner itself is covered in test_plan.py)."""
     async def go():
-        return [e async for e in run_turn(request, d)]
+        events = [e async for e in run_turn(request, d)]
+        assert events[0]["type"] == "plan" and events[0]["sub_queries"] == [request.question]
+        return events[1:]
 
     return asyncio.run(go())
 
 
-def test_turn_streams_tokens_then_done(qdrant, write_doc):
+def test_turn_streams_sources_then_tokens_then_done(qdrant, write_doc):
     write_doc("user-a", "doc-1", "Recursion reduces a problem to a smaller instance.")
     gen = FakeGenerate()
+    docs = [DocRef(doc_id="doc-1", file_name="algorithms.pdf")]
 
-    events = collect(ChatRequest(uid="user-a", question="What is recursion?"), deps(qdrant, gen))
+    events = collect(ChatRequest(uid="user-a", question="What is recursion?", documents=docs), deps(qdrant, gen))
 
     assert events == [
+        {"type": "meta", "route": "retrieve", "answerMode": "grounded"},
+        {"type": "sources", "sources": [{
+            "n": 1, "doc_id": "doc-1", "file_name": "algorithms.pdf", "section": "Fixture",
+            "text": "Recursion reduces a problem to a smaller instance.",
+        }]},
         {"type": "token", "text": "Hello"},
         {"type": "token", "text": " world"},
         {"type": "done"},
@@ -71,7 +81,8 @@ def test_turn_respects_the_scope(qdrant, write_doc):
     write_doc("user-a", "doc-2", "Queues are first in first out.")
     gen = FakeGenerate()
 
-    collect(ChatRequest(uid="user-a", question="first out", doc_ids=["doc-2"]), deps(qdrant, gen))
+    scope = [DocRef(doc_id="doc-2", file_name="queues.md")]
+    collect(ChatRequest(uid="user-a", question="first out", documents=scope), deps(qdrant, gen))
 
     assert "Queues" in gen.prompt()
     assert "Stacks" not in gen.prompt()
@@ -108,7 +119,7 @@ def test_generation_failure_mid_stream_ends_with_error_not_done(qdrant, write_do
 
     events = collect(ChatRequest(uid="user-a", question="q"), deps(qdrant, gen))
 
-    assert [e["type"] for e in events] == ["token", "error"]
+    assert [e["type"] for e in events] == ["meta", "sources", "token", "error"]
 
 
 def test_closing_the_turn_closes_generation(qdrant, write_doc):
@@ -119,9 +130,43 @@ def test_closing_the_turn_closes_generation(qdrant, write_doc):
 
     async def go():
         turn = run_turn(ChatRequest(uid="user-a", question="q"), deps(qdrant, gen))
-        first = await anext(turn)
+        await anext(turn)  # plan
+        await anext(turn)  # meta
+        await anext(turn)  # sources
+        first_token = await anext(turn)
         await turn.aclose()
-        return first
+        return first_token
 
     assert asyncio.run(go()) == {"type": "token", "text": "a"}
     assert gen.closed
+
+
+def test_chunks_are_numbered_and_the_prompt_asks_for_n_citations(qdrant, write_doc):
+    write_doc("user-a", "doc-1", "Heaps keep the minimum at the root.")
+    gen = FakeGenerate()
+
+    collect(ChatRequest(uid="user-a", question="heaps"), deps(qdrant, gen))
+
+    assert "[1]" in gen.prompt()
+    assert "[n]" in gen.messages[0]["content"]
+
+
+def test_source_section_drops_internal_breadcrumb_parts():
+    from turn import to_sources
+
+    chunk = {
+        "content": "x",
+        "metadata": {"docId": "doc-9", "breadcrumb": "Heap Notes > doc-9 > Binary heaps > tokens: 142"},
+    }
+
+    [source] = to_sources(ChatRequest(uid="u", question="q"), [chunk])
+
+    assert source["section"] == "Heap Notes > Binary heaps"
+
+
+def test_no_matching_chunks_means_no_sources_event(qdrant):
+    gen = FakeGenerate()
+
+    events = collect(ChatRequest(uid="user-a", question="anything"), deps(qdrant, gen))
+
+    assert [e["type"] for e in events] == ["meta", "token", "token", "done"]

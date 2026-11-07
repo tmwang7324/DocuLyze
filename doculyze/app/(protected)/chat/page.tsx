@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { requireUid } from "@/_lib/data";
-import { conversationExists, readTranscript } from "@/_lib/conversations";
+import { readAnswerMode, readTranscript } from "@/_lib/conversations";
 import ChatView from "./chat_view";
 
 export const metadata: Metadata = {
@@ -13,13 +13,15 @@ export const metadata: Metadata = {
 export default async function ChatPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
     const uid = await requireUid();
     const { c } = await searchParams;
-    const conversationId = c && (await conversationExists(uid, c)) ? c : null;
+    const storedMode = c ? await readAnswerMode(uid, c) : null;
+    const conversationId = storedMode ? c! : null;
     const transcript = conversationId ? await readTranscript(uid, conversationId) : [];
 
     return (
         <ChatView
             conversationId={conversationId}
-            initialMessages={transcript.map(({ role, content, status }) => ({ role, content, status }))}
+            initialMessages={transcript.map(({ role, content, status, sources, plan, answerMode, route }) => ({ role, content, status, sources, plan, answerMode, route }))}
+            initialAnswerMode={storedMode ?? "grounded"}
         />
     );
 }

@@ -4,6 +4,23 @@ import hashlib
 import os
 from dataclasses import dataclass
 
+from pathlib import Path
+
+
+def _load_root_env() -> None:
+    """Live (opt-in) runs read the repo-root .env for real keys; offline runs never do."""
+    env = Path(__file__).resolve().parents[2] / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+if os.environ.get("RUN_LIVE_EVAL") == "1":
+    _load_root_env()
+
 os.environ.setdefault("EMBEDDING_DIM", "8")  # match EMBED_DIM below
 
 import pytest  # noqa: E402
