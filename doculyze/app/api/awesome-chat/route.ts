@@ -7,12 +7,16 @@ import {
   appendUserMessage,
   createConversation,
   listReadyDocuments,
-  readAnswerMode,
+  readConversation,
   readHistory,
+  readUserMessage,
+  setConversationTitle,
+  truncateFrom,
   type MessageStatus,
   type ReplyExtras,
 } from "@/_lib/conversations";
 import { logOperationalEvent } from "@/_lib/operational_logger";
+import { resolveScope } from "@/_lib/scope";
 
 // One chat Turn (chat ticket 02, ADR-0006). The browser only ever talks to
 // Next: this handler checks the session, owns every Conversation write, and
@@ -36,12 +40,21 @@ export const maxDuration = 300;
 
 const KEEPALIVE_MS = 15_000; // SSE comments defeat proxy idle timeouts
 
-const ChatBody = z.object({
-  question: z.string().trim().min(1).max(32_000),
-  conversationId: z.string().min(1).max(128).optional(),
-  // Only used to create a new Conversation; an existing one keeps its stored mode.
-  answerMode: z.enum(ANSWER_MODES).optional(),
-});
+const ChatBody = z
+  .object({
+    question: z.string().trim().min(1).max(32_000),
+    conversationId: z.string().min(1).max(128).optional(),
+    // Only used to create a new Conversation; an existing one keeps its stored mode.
+    answerMode: z.enum(ANSWER_MODES).optional(),
+    // Edit (and so Regenerate, which is an Edit with the same text): the user Message
+    // at this seq and everything after it are replaced by `question`.
+    editSeq: z.number().int().min(0).optional(),
+    // Document ids to pin a NEW Conversation to (ticket 08); ignored on an existing one.
+    scope: z.array(z.string().min(1).max(128)).max(200).optional(),
+  })
+  .refine((body) => body.editSeq === undefined || body.conversationId !== undefined, {
+    message: "editSeq needs a conversationId",
+  });
 
 function chatServiceUrl(): string {
   const url = process.env.CHAT_SERVICE_URL;
@@ -76,22 +89,44 @@ export async function POST(req: Request) {
 
   // The server holds the mode: an existing Conversation's mode is read from
   // Firestore on every Turn, so nothing in the request can change it.
+  // The Scope is held the same way: chosen once, when the Conversation is created,
+  // and limited then to the caller's own ready documents.
+  const ready = await listReadyDocuments(uid);
   let answerMode: AnswerMode;
   let conversationId: string;
+  let pinned: string[];
   if (parsed.data.conversationId) {
-    const stored = await readAnswerMode(uid, parsed.data.conversationId);
+    const stored = await readConversation(uid, parsed.data.conversationId);
     if (!stored) return new Response("Not found", { status: 404 });
-    answerMode = stored;
+    answerMode = stored.answerMode;
+    pinned = stored.scope;
     conversationId = parsed.data.conversationId;
   } else {
     answerMode = parsed.data.answerMode ?? "grounded";
-    conversationId = await createConversation(uid, question, answerMode);
+    const owned = new Set(ready.map((d) => d.doc_id));
+    pinned = [...new Set(parsed.data.scope ?? [])].filter((id) => owned.has(id));
+    conversationId = await createConversation(uid, question, answerMode, pinned);
+  }
+  const { documents, widened } = resolveScope(pinned, ready);
+  if (widened) console.warn("[chat] Every pinned document is gone; searching the whole library");
+
+  // Edit: discard the Message and everything after it before the history is read, so
+  // the model never sees the discarded tail. The target must be one of the caller's
+  // own user Messages; anything else is "not found" and nothing is touched.
+  const { editSeq } = parsed.data;
+  if (editSeq !== undefined) {
+    if ((await readUserMessage(uid, conversationId, editSeq)) === null) return new Response("Not found", { status: 404 });
+    await truncateFrom(uid, conversationId, editSeq);
+    if (editSeq === 0) await setConversationTitle(uid, conversationId, question);
   }
 
-  const [history, documents] = await Promise.all([readHistory(uid, conversationId), listReadyDocuments(uid)]);
+  const history = await readHistory(uid, conversationId);
+  // Identifies this Turn's user Message, so a reply that lands after an Edit or
+  // Retract removed the Turn (or after another Turn took its seq) is dropped.
+  const turnId = crypto.randomUUID();
   // Started now, awaited only when the reply is written: the user Message write
   // runs in parallel with the chat-service call, never ahead of the first token.
-  const userSeq = appendUserMessage(uid, conversationId, question);
+  const userSeq = appendUserMessage(uid, conversationId, question, turnId);
   userSeq.catch(() => {}); // observed in persistReply; this just avoids an unhandled-rejection warning
 
   const upstream = new AbortController();
@@ -186,10 +221,18 @@ export async function POST(req: Request) {
         try {
           const seq = await userSeq;
           const failed = outcome === "failed";
-          await appendAssistantMessage(uid, conversationId, seq + 1, failed ? "" : text, outcome, failed ? {} : { sources, plan, route, answerMode: answeredIn });
+          const written = await appendAssistantMessage(uid, conversationId, seq + 1, failed ? "" : text, outcome, {
+            ...(failed ? {} : { sources, plan, route, answerMode: answeredIn }),
+            turnId,
+          });
           logOperationalEvent(outcome === "failed" ? "error" : "info", {
             operation: "chatTurn",
-            lifecycle: outcome,
+            // "dropped": the Turn was Edited or Retracted away before its reply landed.
+            lifecycle: written ? outcome : "dropped",
+            edited: editSeq !== undefined,
+            scopeDocuments: documents.length,
+            scopePinned: pinned.length,
+            scopeWidened: widened,
             durationMs: Date.now() - startedAt,
             userId: uid,
             conversationId,

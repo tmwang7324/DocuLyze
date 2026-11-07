@@ -11,7 +11,7 @@ vi.mock("@/_lib/data", () => ({
 
 import { GET, POST } from "@/app/api/awesome-chat/route";
 import { createSseParser, type ChatEvent } from "@/_lib/chat_events";
-import { createConversation, readTranscript } from "@/_lib/conversations";
+import { appendUserMessage, createConversation, listConversations, readTranscript } from "@/_lib/conversations";
 import { db } from "@/_lib/admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { authAs, resetEmulators } from "../helpers/harness";
@@ -240,5 +240,175 @@ describe("chat ticket 02 — /api/awesome-chat route handler", () => {
     const othersConversation = await createConversation("user-b", "private");
     const res = await post({ question: "peek", conversationId: othersConversation });
     expect(res.status).toBe(404);
+  });
+});
+
+// --- Chat ticket 08: Scope pinning ----------------------------------------------
+describe("chat ticket 08 — Scope pinning", () => {
+  const docs = (uid: string) => db.collection("users").doc(uid).collection("documents");
+  const ready = (uid: string, id: string, file_name: string) => docs(uid).doc(id).set({ status: "ready", file_name, title: "" });
+  const A = { doc_id: "doc-a", file_name: "a.pdf" };
+  const B = { doc_id: "doc-b", file_name: "b.pdf" };
+
+  beforeEach(async () => {
+    await ready(UID, "doc-a", "a.pdf");
+    await ready(UID, "doc-b", "b.pdf");
+  });
+
+  it("searches every ready document when no Scope is chosen", async () => {
+    await (await post({ question: "q" })).text();
+
+    expect(lastBody?.documents).toEqual([A, B]);
+  });
+
+  it("a new Conversation pinned to one document sends only that document, on every Turn", async () => {
+    const first = await post({ question: "q1", scope: ["doc-b"] });
+    const conversationId = first.headers.get("X-Conversation-Id")!;
+    await first.text();
+    expect(lastBody?.documents).toEqual([B]);
+
+    await (await post({ question: "q2", conversationId })).text(); // no scope in this request
+    expect(lastBody?.documents).toEqual([B]);
+  });
+
+  it("an existing Conversation keeps its stored Scope — the request can't change it", async () => {
+    const first = await post({ question: "q1", scope: ["doc-a"] });
+    const conversationId = first.headers.get("X-Conversation-Id")!;
+    await first.text();
+
+    await (await post({ question: "q2", conversationId, scope: ["doc-b"] })).text();
+
+    expect(lastBody?.documents).toEqual([A]);
+  });
+
+  it("ignores a pinned id that belongs to another user", async () => {
+    await ready("user-b", "doc-theirs", "theirs.pdf");
+
+    await (await post({ question: "q", scope: ["doc-theirs", "doc-a"] })).text();
+    expect(lastBody?.documents).toEqual([A]);
+
+    // Only a foreign id pinned: nothing of the caller's is pinned, so the whole library is searched.
+    await (await post({ question: "q", scope: ["doc-theirs"] })).text();
+    expect(lastBody?.documents).toEqual([A, B]);
+  });
+
+  it("a pinned document that is later deleted drops out of the Scope", async () => {
+    const first = await post({ question: "q1", scope: ["doc-a", "doc-b"] });
+    const conversationId = first.headers.get("X-Conversation-Id")!;
+    await first.text();
+
+    await docs(UID).doc("doc-a").delete();
+    await (await post({ question: "q2", conversationId })).text();
+
+    expect(lastBody?.documents).toEqual([B]);
+  });
+
+  it("an emptied Scope widens back to everything — it never searches zero documents", async () => {
+    const first = await post({ question: "q1", scope: ["doc-a"] });
+    const conversationId = first.headers.get("X-Conversation-Id")!;
+    await first.text();
+
+    await docs(UID).doc("doc-a").delete();
+    await (await post({ question: "q2", conversationId })).text();
+
+    expect(lastBody?.documents).toEqual([B]);
+  });
+
+  it("rejects a malformed Scope (400)", async () => {
+    expect((await post({ question: "q", scope: "doc-a" })).status).toBe(400);
+    expect((await post({ question: "q", scope: [""] })).status).toBe(400);
+    expect((await post({ question: "q", scope: Array.from({ length: 201 }, (_, i) => `d${i}`) })).status).toBe(400);
+  });
+});
+
+// --- Chat ticket 05: Edit and Regenerate --------------------------------------
+// Edit = the same POST with `editSeq`: the user Message at that seq and everything
+// after it are removed, then the new text runs as an ordinary Turn. Regenerate is an
+// Edit with the same text, so it needs no code path of its own.
+describe("chat ticket 05 — Edit and Regenerate", () => {
+  async function twoTurns() {
+    const first = await post({ question: "q1" });
+    const conversationId = first.headers.get("X-Conversation-Id")!;
+    await first.text();
+    await (await post({ question: "q2", conversationId })).text();
+    return conversationId;
+  }
+  const summary = async (id: string) => (await readTranscript(UID, id)).map((m) => `${m.seq}:${m.role}:${m.content}`);
+
+  it("Edit removes that Message and everything after it, then answers the new text", async () => {
+    const conversationId = await twoTurns();
+
+    const res = await post({ question: "q2, reworded", conversationId, editSeq: 2 });
+    expect(res.headers.get("X-Conversation-Id")).toBe(conversationId);
+    await res.text();
+
+    expect(await summary(conversationId)).toEqual(["0:user:q1", "1:assistant:Hello", "2:user:q2, reworded", "3:assistant:Hello"]);
+    // The model sees the history before the edited Message only — never the discarded tail.
+    expect(lastBody?.history).toEqual([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "Hello" },
+    ]);
+  });
+
+  it("Editing the first Message restarts the Conversation and retitles it", async () => {
+    const conversationId = await twoTurns();
+
+    await (await post({ question: "a better first question", conversationId, editSeq: 0 })).text();
+
+    expect(await summary(conversationId)).toEqual(["0:user:a better first question", "1:assistant:Hello"]);
+    expect((await listConversations(UID))[0]).toMatchObject({ id: conversationId, title: "a better first question" });
+  });
+
+  it("Regenerate (an Edit with the same text) replaces a failed answer instead of duplicating it", async () => {
+    mode = "http-500";
+    const failed = await post({ question: "Will this work?" });
+    const conversationId = failed.headers.get("X-Conversation-Id")!;
+    await failed.text();
+    expect((await readTranscript(UID, conversationId))[1]).toMatchObject({ role: "assistant", status: "failed" });
+
+    mode = "answer";
+    await (await post({ question: "Will this work?", conversationId, editSeq: 0 })).text();
+
+    const transcript = await readTranscript(UID, conversationId);
+    expect(transcript.map((m) => `${m.seq}:${m.role}:${m.status ?? ""}`)).toEqual(["0:user:", "1:assistant:complete"]);
+    expect(transcript[1].content).toBe("Hello");
+  });
+
+  it("refuses an Edit of an assistant Message, a missing seq, or another user's Conversation", async () => {
+    const conversationId = await twoTurns();
+    const theirs = await createConversation("user-b", "private");
+    await appendUserMessage("user-b", theirs, "private");
+    const before = await summary(conversationId);
+
+    expect((await post({ question: "x", conversationId, editSeq: 1 })).status).toBe(404); // an assistant reply
+    expect((await post({ question: "x", conversationId, editSeq: 99 })).status).toBe(404);
+    expect((await post({ question: "x", conversationId: theirs, editSeq: 0 })).status).toBe(404);
+
+    expect(await summary(conversationId)).toEqual(before);
+    expect(await readTranscript("user-b", theirs)).toHaveLength(1);
+  });
+
+  it("rejects an editSeq without a Conversation, or a malformed one (400)", async () => {
+    expect((await post({ question: "x", editSeq: 0 })).status).toBe(400);
+    expect((await post({ question: "x", conversationId: "c", editSeq: -1 })).status).toBe(400);
+    expect((await post({ question: "x", conversationId: "c", editSeq: 1.5 })).status).toBe(400);
+  });
+
+  it("Edit during a live stream: the stopped reply never survives as an orphan", async () => {
+    mode = "hang-after-one-token";
+    const browser = new AbortController();
+    const res = await post({ question: "first wording" }, browser.signal);
+    const conversationId = res.headers.get("X-Conversation-Id")!;
+    const reader = res.body!.getReader();
+    await reader.read(); // an answer is streaming
+    await waitFor(async () => ((await readTranscript(UID, conversationId)).length ? true : undefined));
+
+    browser.abort(); // the client aborts first …
+    await reader.cancel().catch(() => {});
+    mode = "answer";
+    await (await post({ question: "second wording", conversationId, editSeq: 0 })).text(); // … then edits
+    await new Promise((r) => setTimeout(r, 400)); // give the aborted Turn every chance to write late
+
+    expect(await summary(conversationId)).toEqual(["0:user:second wording", "1:assistant:Hello"]);
   });
 });

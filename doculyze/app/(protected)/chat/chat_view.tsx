@@ -1,11 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createSseParser, type AnswerMode, type RetrievalPlan, type Source } from "@/_lib/chat_events";
 import { answerBadge } from "@/_lib/answer_mode";
 import { setAnswerMode } from "@/app/actions/chat/set_answer_mode";
+import { deleteConversation } from "@/app/actions/chat/delete_conversation";
+import { listMyConversations } from "@/app/actions/chat/list_conversations";
+import { retractMessage } from "@/app/actions/chat/retract_message";
 import { resolveOpenSource, type OpenCitation } from "@/_lib/citations";
+import type { ConversationSummary } from "@/_lib/conversations";
+import type { ScopeDocument } from "@/_lib/scope";
 import AnswerBody from "./answer_body";
+import ConversationList from "./conversation_list";
 
 type ViewMessage = {
     role: "user" | "assistant";
@@ -18,6 +25,19 @@ type ViewMessage = {
     route?: string;
 };
 
+// `names` is the pinned documents' file names, or null when the Conversation
+// searches everything. `widened`: it was pinned, but every pinned document is gone.
+export type ScopeInfo = { names: string[] | null; widened: boolean };
+
+// Scope pinning (chat ticket 08) is archived until after the demo: the picker is
+// hidden, but the route, the stored `scope` field and the tests all stay. Flip this
+// to bring the picker back — nothing else needs to change.
+const SCOPE_PINNING_ENABLED = false;
+
+// A message's seq is its index in the list: a Conversation's Messages are written
+// as contiguous user/assistant pairs from 0, and Edit/Retract rewind to a seq.
+// The server re-checks that the seq is one of the caller's own user Messages.
+
 // Minimal chat: a message list and a chat bar. The question goes out as a POST
 // and the answer streams back on the same response (fetch + reader — EventSource
 // is GET-only). Stop aborts the fetch; the server saves what was shown.
@@ -25,11 +45,18 @@ export default function ChatView({
     conversationId: initialConversationId,
     initialMessages,
     initialAnswerMode,
+    initialConversations,
+    library,
+    initialScope,
 }: {
     conversationId: string | null;
     initialMessages: ViewMessage[];
     initialAnswerMode: AnswerMode;
+    initialConversations: ConversationSummary[];
+    library: ScopeDocument[];
+    initialScope: ScopeInfo;
 }) {
+    const router = useRouter();
     const [answerMode, setMode] = useState<AnswerMode>(initialAnswerMode);
     const [modeError, setModeError] = useState<string | null>(null);
     const [messages, setMessages] = useState<ViewMessage[]>(initialMessages);
@@ -37,9 +64,17 @@ export default function ChatView({
     const [streaming, setStreaming] = useState(false);
     const [health, setHealth] = useState<"checking" | "available" | "unavailable">("checking");
     const [openCitation, setOpenCitation] = useState<OpenCitation | null>(null);
+    const [conversations, setConversations] = useState(initialConversations);
+    const [activeId, setActiveId] = useState(initialConversationId);
+    const [scope, setScope] = useState(initialScope);
+    const [picked, setPicked] = useState<Set<string>>(new Set()); // documents chosen for a NEW Conversation
+    const [choosing, setChoosing] = useState(false);
+    const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
     const openSource = resolveOpenSource(messages, openCitation);
     const conversationId = useRef(initialConversationId);
     const abort = useRef<AbortController | null>(null);
+    const inflight = useRef<Promise<void> | null>(null);
 
     const checkHealth = useCallback(async () => {
         setHealth("checking");
@@ -55,6 +90,14 @@ export default function ChatView({
     }, []);
 
     useEffect(() => { void checkHealth(); }, [checkHealth]);
+
+    const refreshConversations = useCallback(async () => {
+        try {
+            setConversations(await listMyConversations());
+        } catch (error) {
+            console.error("[chat] Failed to refresh the conversation list", error);
+        }
+    }, []);
 
     // Replace the last (assistant) message — the one currently streaming.
     const updateLast = (fn: (m: ViewMessage) => ViewMessage) =>
@@ -77,13 +120,16 @@ export default function ChatView({
         }
     }
 
-    async function send() {
-        const question = input.trim();
-        if (!question || streaming || health !== "available") return;
-        setInput("");
+    // One Turn: a new question, or (with editSeq) a replacement for the user Message
+    // at that seq and everything after it — which is also what Regenerate is.
+    async function runTurn(question: string, editSeq?: number) {
+        let finished!: () => void;
+        inflight.current = new Promise<void>((resolve) => (finished = resolve));
+        const firstTurn = !conversationId.current;
+        setActionError(null);
         setStreaming(true);
         setMessages((prev) => [
-            ...prev,
+            ...(editSeq === undefined ? prev : prev.slice(0, editSeq)),
             { role: "user", content: question },
             { role: "assistant", content: "", status: "streaming" },
         ]);
@@ -94,7 +140,13 @@ export default function ChatView({
             const res = await fetch("/api/awesome-chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ question, conversationId: conversationId.current ?? undefined, answerMode }),
+                body: JSON.stringify({
+                    question,
+                    conversationId: conversationId.current ?? undefined,
+                    answerMode,
+                    ...(editSeq === undefined ? {} : { editSeq }),
+                    ...(firstTurn && picked.size ? { scope: [...picked] } : {}),
+                }),
                 signal: controller.signal,
             });
             if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -102,7 +154,12 @@ export default function ChatView({
             const id = res.headers.get("X-Conversation-Id");
             if (id && id !== conversationId.current) {
                 conversationId.current = id;
+                setActiveId(id);
                 window.history.replaceState(null, "", `/chat?c=${encodeURIComponent(id)}`);
+                // The Scope was fixed when the Conversation was created.
+                const names = library.filter((d) => picked.has(d.doc_id)).map((d) => d.file_name);
+                setScope({ names: names.length ? names : null, widened: false });
+                setChoosing(false);
             }
 
             const parse = createSseParser((event) => {
@@ -133,12 +190,91 @@ export default function ChatView({
             );
         } finally {
             abort.current = null;
+            inflight.current = null;
             setStreaming(false);
+            finished();
+            void refreshConversations(); // the title / order may have changed
         }
     }
 
+    async function send() {
+        const question = input.trim();
+        if (!question || streaming || health !== "available") return;
+        setInput("");
+        await runTurn(question);
+    }
+
+    // Edit, Retract and delete all discard Messages, so a live stream is aborted and
+    // allowed to settle first. A reply that still lands afterwards is dropped by the
+    // server (it no longer matches a Turn in the Conversation).
+    async function interrupt() {
+        const pending = inflight.current;
+        if (!pending) return;
+        abort.current?.abort();
+        await pending;
+    }
+
+    async function submitEdit(index: number, text: string) {
+        const question = text.trim();
+        if (!question || health !== "available") return;
+        setEditing(null);
+        await interrupt();
+        await runTurn(question, index);
+    }
+
+    async function retract(index: number) {
+        if (!conversationId.current) return;
+        await interrupt();
+        try {
+            await retractMessage(conversationId.current, index);
+            setMessages((prev) => prev.slice(0, index));
+            setOpenCitation(null);
+            void refreshConversations();
+        } catch (error) {
+            console.error("[chat] Failed to retract a message", error);
+            setActionError("Couldn't retract that message. Try again.");
+        }
+    }
+
+    // Regenerate is an Edit with the same text.
+    async function regenerate(assistantIndex: number) {
+        const question = messages[assistantIndex - 1]?.content;
+        if (!question || health !== "available") return;
+        await interrupt();
+        await runTurn(question, assistantIndex - 1);
+    }
+
+    async function startNewChat() {
+        await interrupt();
+        router.push(`/chat?n=${Date.now()}`);
+    }
+
+    async function removeConversation(id: string) {
+        if (!window.confirm("Delete this conversation? This can't be undone.")) return;
+        if (id === conversationId.current) await interrupt();
+        try {
+            await deleteConversation(id);
+            setConversations((prev) => prev.filter((c) => c.id !== id));
+            if (id === conversationId.current) router.push(`/chat?n=${Date.now()}`);
+        } catch (error) {
+            console.error("[chat] Failed to delete a conversation", error);
+            setActionError("Couldn't delete that conversation. Try again.");
+        }
+    }
+
+    function togglePicked(docId: string) {
+        setPicked((prev) => {
+            const next = new Set(prev);
+            if (!next.delete(docId)) next.add(docId);
+            return next;
+        });
+    }
+
+    const scopeText = scope.names ? `Searching: ${scope.names.join(", ")}` : "Searching: all documents";
+
     return (
         <div className="flex h-[calc(100vh-4rem)]">
+        <ConversationList conversations={conversations} activeId={activeId} onNew={() => void startNewChat()} onDelete={(id) => void removeConversation(id)} />
         <div className="flex flex-col flex-1 min-w-0 max-w-3xl mx-auto px-4">
             <div className="flex items-center justify-between gap-3 py-3 border-b border-hairline text-sm">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -150,16 +286,76 @@ export default function ChatView({
                     />
                     Allow general knowledge
                 </label>
-                <span className="text-muted">
+                <span className="text-muted text-right">
                     {modeError ?? (answerMode === "open" ? "Mode: documents + general knowledge" : "Mode: documents only")}
                 </span>
             </div>
+            {activeId && (scope.names || scope.widened || SCOPE_PINNING_ENABLED) && (
+                <div className="py-1.5 text-xs text-muted border-b border-hairline">
+                    {scopeText}
+                    {scope.widened && " — the documents this chat was pinned to were deleted, so it searches all documents."}
+                </div>
+            )}
+            {actionError && <div role="alert" className="py-1.5 text-xs text-error">{actionError}</div>}
             <div className="flex-1 overflow-y-auto py-8 space-y-4">
                 {messages.length === 0 && (
-                    <p className="text-muted text-center mt-24">Ask a question about your documents.</p>
+                    <div className="text-center mt-24 space-y-4">
+                        <p className="text-muted">Ask a question about your documents.</p>
+                        {/* The Scope is fixed when a Conversation is created, so only a new one offers the choice. */}
+                        {SCOPE_PINNING_ENABLED && !activeId && library.length > 0 && (
+                            <div className="inline-block text-left text-sm">
+                                <div className="flex items-center gap-4 justify-center">
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio" name="scope" checked={!choosing} onChange={() => { setChoosing(false); setPicked(new Set()); }} />
+                                        All documents
+                                    </label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio" name="scope" checked={choosing} onChange={() => setChoosing(true)} />
+                                        Choose documents
+                                    </label>
+                                </div>
+                                {choosing && (
+                                    <ul aria-label="Documents to search" className="mt-3 max-h-48 overflow-y-auto space-y-1 border border-hairline rounded-lg p-3">
+                                        {library.map((d) => (
+                                            <li key={d.doc_id}>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input type="checkbox" checked={picked.has(d.doc_id)} onChange={() => togglePicked(d.doc_id)} />
+                                                    {d.file_name}
+                                                </label>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 )}
                 {messages.map((m, i) => (
-                    <div key={i} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                    <div key={i} className={m.role === "user" ? "flex flex-col items-end" : "flex flex-col items-start"}>
+                        {m.role === "user" && editing?.index === i ? (
+                            <form
+                                className="w-full max-w-[80%] space-y-2"
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    void submitEdit(i, editing.text);
+                                }}
+                            >
+                                <textarea
+                                    aria-label="Edit message"
+                                    className="w-full border border-hairline rounded-2xl px-4 py-2 outline-none focus:border-orange-primary"
+                                    rows={3}
+                                    value={editing.text}
+                                    onChange={(e) => setEditing({ index: i, text: e.target.value })}
+                                    autoFocus
+                                />
+                                <div className="flex justify-end gap-2 text-sm">
+                                    <button type="button" className="px-3 py-1 text-muted" onClick={() => setEditing(null)}>Cancel</button>
+                                    <button type="submit" className="rounded-full px-4 py-1 bg-orange-primary text-white disabled:opacity-50" disabled={!editing.text.trim() || health !== "available"}>
+                                        Save & resend
+                                    </button>
+                                </div>
+                            </form>
+                        ) : (
                         <div
                             className={
                                 m.role === "user"
@@ -203,9 +399,26 @@ export default function ChatView({
                                 <div className="text-xs text-muted mt-1">Stopped</div>
                             )}
                             {m.status === "failed" && (
-                                <div className="text-xs text-error mt-1">{m.error || "Answer failed. Try again."}</div>
+                                <div className="text-xs text-error mt-1">
+                                    {m.error || "Answer failed."}
+                                    {activeId && messages[i - 1]?.role === "user" && (
+                                        <>
+                                            {" — "}
+                                            <button type="button" className="underline" disabled={health !== "available"} onClick={() => void regenerate(i)}>
+                                                Regenerate
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
                             )}
                         </div>
+                        )}
+                        {m.role === "user" && activeId && editing?.index !== i && (
+                            <div className="mt-1 flex gap-3 text-xs text-muted">
+                                <button type="button" className="hover:text-dark" onClick={() => setEditing({ index: i, text: m.content })}>Edit</button>
+                                <button type="button" className="hover:text-error" onClick={() => void retract(i)}>Retract</button>
+                            </div>
+                        )}
                     </div>
                 ))}
             </div>

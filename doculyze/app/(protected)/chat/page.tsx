@@ -1,27 +1,39 @@
 import type { Metadata } from "next";
 import { requireUid } from "@/_lib/data";
-import { readAnswerMode, readTranscript } from "@/_lib/conversations";
+import { listConversations, listReadyDocuments, readConversation, readTranscript } from "@/_lib/conversations";
+import { resolveScope } from "@/_lib/scope";
 import ChatView from "./chat_view";
 
 export const metadata: Metadata = {
     title: "Chat — DocuLyze",
 };
 
-// The chat tracer (ticket 02). `/chat` starts a new Conversation; `/chat?c=<id>`
-// reopens one — the page reads the transcript from Firestore, so a reload shows
-// exactly what was saved (complete, stopped or failed).
-export default async function ChatPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
+// `/chat` starts a new Conversation; `/chat?c=<id>` reopens one — the page reads the
+// transcript from Firestore, so a reload shows exactly what was saved (complete,
+// stopped or failed). `n` is only a nonce: "New chat" navigates to a fresh `n` so
+// the view remounts empty even when the previous chat's URL was rewritten in place.
+export default async function ChatPage({ searchParams }: { searchParams: Promise<{ c?: string; n?: string }> }) {
     const uid = await requireUid();
-    const { c } = await searchParams;
-    const storedMode = c ? await readAnswerMode(uid, c) : null;
-    const conversationId = storedMode ? c! : null;
-    const transcript = conversationId ? await readTranscript(uid, conversationId) : [];
+    const { c, n } = await searchParams;
+    const stored = c ? await readConversation(uid, c) : null;
+    const conversationId = stored ? c! : null;
+    const [transcript, conversations, library] = await Promise.all([
+        conversationId ? readTranscript(uid, conversationId) : Promise.resolve([]),
+        listConversations(uid),
+        listReadyDocuments(uid),
+    ]);
+    const { documents, widened } = resolveScope(stored?.scope, library);
+    const pinned = !!stored?.scope.length && !widened;
 
     return (
         <ChatView
+            key={conversationId ?? `new-${n ?? ""}`}
             conversationId={conversationId}
             initialMessages={transcript.map(({ role, content, status, sources, plan, answerMode, route }) => ({ role, content, status, sources, plan, answerMode, route }))}
-            initialAnswerMode={storedMode ?? "grounded"}
+            initialAnswerMode={stored?.answerMode ?? "grounded"}
+            initialConversations={conversations}
+            library={library}
+            initialScope={{ names: pinned ? documents.map((d) => d.file_name) : null, widened }}
         />
     );
 }
