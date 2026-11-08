@@ -50,31 +50,46 @@ def propose_legacy_labels(source, chunks):
     return labels
 
 
-def index_corpus(client, chunks, embed, model, dimension):
+def index_corpus(client, chunks, embed, model, dimension, *, collection=COLLECTION, uid=UID,
+                 chunker_version=CHUNKER_VERSION, sparse_embed=None, sparse_model=None):
+    """Embed and upsert every chunk into an evaluation collection, resuming a matching one.
+
+    With `sparse_embed`, each point also gets a BM25 sparse vector (server-side IDF), as
+    production stores them, so the collection can serve hybrid retrieval."""
     if not chunks or len({(c["document"], c["chunk_index"]) for c in chunks}) != len(chunks):
         raise ValueError("Corpus must contain uniquely identified chunks")
     metadata = {"purpose": "doculyze-evaluation", "corpus_version": corpus_version(chunks),
-                "chunker_version": CHUNKER_VERSION, "embedding_model": model}
-    if client.collection_exists(COLLECTION):
-        actual = client.get_collection(COLLECTION).config.metadata or {}
+                "chunker_version": chunker_version, "embedding_model": model}
+    if sparse_embed is not None:
+        metadata["sparse_model"] = sparse_model or "unknown"
+    if client.collection_exists(collection):
+        actual = client.get_collection(collection).config.metadata or {}
         if any(actual.get(key) != value for key, value in metadata.items()):
             raise ValueError("Existing evaluation collection metadata does not match corpus")
     else:
-        client.create_collection(COLLECTION, vectors_config={"dense": VectorParams(size=dimension, distance=Distance.COSINE)},
-                                 metadata=metadata)
-    client.create_payload_index(COLLECTION, "userId", PayloadSchemaType.KEYWORD, wait=True)
+        sparse_config = None
+        if sparse_embed is not None:
+            from qdrant_client.models import Modifier, SparseVectorParams
+
+            sparse_config = {"sparse": SparseVectorParams(modifier=Modifier.IDF)}
+        client.create_collection(collection, vectors_config={"dense": VectorParams(size=dimension, distance=Distance.COSINE)},
+                                 sparse_vectors_config=sparse_config, metadata=metadata)
+    client.create_payload_index(collection, "userId", PayloadSchemaType.KEYWORD, wait=True)
     for start in range(0, len(chunks), 32):
         batch = chunks[start:start + 32]
-        vectors = embed([chunk["content"] for chunk in batch], input_type="document")
+        texts = [chunk["content"] for chunk in batch]
+        vectors = embed(texts, input_type="document")
         if len(vectors) != len(batch) or any(len(vector) != dimension for vector in vectors):
             raise ValueError("Embedding count or dimension does not match corpus batch")
+        sparse = sparse_embed(texts, input_type="document") if sparse_embed is not None else [None] * len(batch)
         points = []
-        for chunk, vector in zip(batch, vectors, strict=True):
-            key = f"{COLLECTION}/{UID}/{chunk['document']}/{chunk['chunk_index']}"
-            points.append(PointStruct(id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)), vector={"dense": vector},
-                                      payload={"userId": UID, "docId": chunk["document"],
-                                               "chunk_index": chunk["chunk_index"], "content": chunk["content"]}))
-        client.upsert(COLLECTION, points, wait=True)
+        for chunk, vector, sparse_vector in zip(batch, vectors, sparse, strict=True):
+            key = f"{collection}/{uid}/{chunk['document']}/{chunk['chunk_index']}"
+            payload = {"userId": uid, "docId": chunk["document"],
+                       "chunk_index": chunk["chunk_index"], "content": chunk["content"]}
+            vector_data = {"dense": vector} if sparse_vector is None else {"dense": vector, "sparse": sparse_vector}
+            points.append(PointStruct(id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)), vector=vector_data, payload=payload))
+        client.upsert(collection, points, wait=True)
         LOG.info("Indexed %d/%d chunks", min(start + len(batch), len(chunks)), len(chunks))
     return metadata
 

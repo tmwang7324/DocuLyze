@@ -75,3 +75,87 @@ Empty results score zero. Cases with no Reference Passages or missing, invalid,
 or unreviewed mappings are not scored. Unanswerable and no-search cases are
 not retrieval cases and need separate evaluation. Aggregate metrics exclude
 failed cases, whose error and total count remain visible.
+
+## Grouped reporting and edge cases (ticket 2)
+
+`run_suite` reports every metric overall and per benchmark group (`google`,
+`tathybrid`, `papertext`, `papertab`), each with `count`, `scored`, `failed` and
+`not_scored`. Averages cover scored cases only. A case with no Reference Passages
+that carries a `not_scored_reason` is still retrieved, so its answer can be
+evaluated, but it is reported as `not_scored` instead of failing. A case whose
+mapping is invalid or unreviewed fails visibly with the reason. The full policy is
+in the `evaluation/benchmark.py` docstring.
+
+## UDA benchmark
+
+The 17 selected UDA questions (`uda_questions.json`; the eight
+`pending_authoring` placeholders are excluded) run over a shared corpus of their 17
+source documents. The corpus is chunked from the committed Markdown by the
+production chunker, 2,331 chunks in total.
+
+- `evaluation/uda_evidence.json`: each question joined by document and `q_uid` to
+  UDA's `extended_qa_info` evidence. Paper questions use the first annotator's
+  highlighted evidence (table captions keep kind `caption`). TatHybrid questions
+  use the answer's `facts`, one passage per table value. Two yes/no questions have
+  no evidence, so they are answer-only (`not_scored` for retrieval). Regenerate with
+  `python -m evaluation.uda --import-evidence`, which downloads the evidence files.
+- `evaluation/uda_labels.json`: evidence-to-chunk mappings. They were proposed with
+  LLM assistance (one Claude Sonnet subagent per subset), and every excerpt was
+  checked to occur verbatim in its chunk (`matched_text`). They are **not human
+  reviewed** (`reviewed_by` is empty). Review them, fill in `reviewed_by`, and
+  scoring no longer needs `--allow-unreviewed`. `python -m evaluation.uda --propose
+  FILE` writes deterministic text-matching proposals instead. Labels are tied to the
+  corpus fingerprint and to the chunker's source hash. If either changes, the runner
+  and `test_committed_labels_match_the_current_corpus_and_chunker` fail until the
+  labels are re-proposed and re-reviewed.
+
+Live run (Voyage embeddings, plus OpenAI with `--ragas`; needs `VOYAGE_API_KEY` and
+`OPENAI_API_KEY`):
+
+```sh
+python -m evaluation.uda --live --strategy hybrid --scope document --allow-unreviewed --ragas
+```
+
+The index is a local on-disk Qdrant (`evaluation/results/uda-qdrant`, collection
+`uda_eval_chunks`, tenant `uda-eval`). No server is involved, and Qdrant Cloud and
+the production collection are never touched. The first run embeds the corpus,
+about $0.03 with voyage-3.5-lite. Later runs reuse the index after checking its
+contents against the corpus fingerprint. Choose `--strategy dense|hybrid`
+(production RRF fusion) and `--scope corpus|document`. UDA questions are written
+per document ("the company", "they"), so `corpus` scope makes them ambiguous
+across the 17 filings and papers. `document` scope searches only the case's source
+document, as a Conversation pinned to it would. Each run writes `retrieval.json`,
+`ragas.json`, `calibration.json` and `summary.md` under `evaluation/results/`, which
+is ignored. `summary.md` contains no corpus text. Summaries from the first runs are
+committed in `evaluation/reports/`.
+
+## RAGAS answer scoring (ticket 6)
+
+`--ragas` generates an answer per case the way the grounded chat Turn does. The
+system prompt is `GROUNDED_PROMPT`, read from `awesome-chat-service/turn.py`, the
+excerpts are numbered `[n] breadcrumb`, the top `CHAT_TOP_K` (8) chunks are used,
+and the model and reasoning effort come from `CHAT_MODEL` and
+`CHAT_REASONING_EFFORT`. RAGAS then scores the answer, separately from the
+deterministic metrics:
+
+| Metric | Measures | Inputs |
+|---|---|---|
+| context_precision | the retrieved contexts that help reach the reference answer, and whether they rank early | question, reference answer, contexts |
+| faithfulness | whether the answer's claims are supported by the contexts | question, answer, contexts |
+| response_relevancy | whether the answer addresses the question | question, answer (judge + embeddings) |
+
+The judge is pinned in `ragas_scoring.JUDGE_CONFIG`: `gpt-4.1-mini-2025-04-14` at
+temperature 0, `text-embedding-3-small`, and ragas 0.4.3. The judge is deliberately
+a different model from the generator. A judge error, a missing input or a failed
+generation is recorded per case in `errors` and counted beside each mean, never
+averaged in as a score. `calibration.json` holds a fixed five-case sample with
+empty `human_*` columns, for checking the judge against human grades.
+
+None of these three metrics compares the answer with the reference for
+correctness. A faithful answer drawn from the wrong document scores well. Add
+RAGAS `FactualCorrectness` or `AnswerAccuracy` if correctness is needed.
+
+Install the pinned environment with `pip install -r evaluation/requirements.txt`.
+Run the offline tests with `python -m pytest evaluation/tests`.
+`test_proposal_cli_creates_unreviewed_file_without_network` needs the uncommitted
+`ingest-worker/experimental_results/chunks/` folder and fails without it.

@@ -14,8 +14,9 @@ CORRECTIONS = ROOT / "evaluation" / "google_corrections.json"
 LOG = logging.getLogger("evaluation.google")
 
 
-def validate_collection(client, labels, embedding_model=None, chunks=None):
-    metadata = client.get_collection("google_eval_chunks").config.metadata or {}
+def validate_collection(client, labels, embedding_model=None, chunks=None, *,
+                        collection="google_eval_chunks", uid="google-eval"):
+    metadata = client.get_collection(collection).config.metadata or {}
     expected = {"purpose": "doculyze-evaluation", "corpus_version": labels["corpus_version"],
                 "chunker_version": labels["chunker_version"]}
     if embedding_model is not None:
@@ -27,11 +28,11 @@ def validate_collection(client, labels, embedding_model=None, chunks=None):
 
         found, offset = [], None
         while True:
-            points, offset = client.scroll("google_eval_chunks", limit=100, offset=offset,
+            points, offset = client.scroll(collection, limit=100, offset=offset,
                                            with_payload=True, with_vectors=False)
             for point in points:
                 payload = point.payload or {}
-                if payload.get("userId") != "google-eval":
+                if payload.get("userId") != uid:
                     raise ValueError("Evaluation collection contents contain an unexpected tenant")
                 found.append({"document": payload.get("docId"), "chunk_index": payload.get("chunk_index"),
                               "content": payload.get("content")})
