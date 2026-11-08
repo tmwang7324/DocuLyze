@@ -217,3 +217,62 @@ def test_incomplete_index_is_rejected_before_scoring():
         validate_collection(client, labels, "test-model", chunks)
     finally:
         client.close()
+
+
+def _header_corpus():
+    chunks = [{"document": "a.pdf", "chunk_index": 0, "content": "first"},
+              {"document": "b.pdf", "chunk_index": 0, "content": "second"}]
+    return chunks, {("a.pdf", 0): "Acme > Results"}
+
+
+def test_corpus_indexes_contextual_headers_without_changing_the_fingerprint():
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import SparseVector
+    from evaluation.corpus import UID, corpus_version, index_corpus, CHUNKER_VERSION
+    from evaluation.google import validate_collection
+
+    chunks, headers = _header_corpus()
+    dense_seen, sparse_seen = [], []
+
+    def embed(texts, input_type):
+        dense_seen.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    def sparse_embed(texts, input_type):
+        sparse_seen.append(list(texts))
+        return [SparseVector(indices=[0], values=[1.0]) for _ in texts]
+
+    client = QdrantClient(":memory:")
+    try:
+        index_corpus(client, chunks, embed, "test-model", 2, collection="ctx", sparse_embed=sparse_embed,
+                     sparse_model="bm25", headers=headers)
+        # Both embedders see the same text production embeds; chunks without a header are unchanged.
+        expected = [["Acme > Results\n\nfirst", "second"]]
+        assert dense_seen == expected and sparse_seen == expected
+        payloads = {p.payload["docId"]: p.payload for p in client.scroll("ctx", with_payload=True)[0]}
+        assert payloads["a.pdf"]["content"] == "first" and payloads["a.pdf"]["context_header"] == "Acme > Results"
+        metadata = client.get_collection("ctx").config.metadata
+        assert metadata["embedding_format"] == "contextual-v1"
+        # The corpus fingerprint covers raw content only, so reviewed labels stay valid.
+        assert metadata["corpus_version"] == corpus_version(chunks)
+        validate_collection(client, {"corpus_version": corpus_version(chunks), "chunker_version": CHUNKER_VERSION},
+                            "test-model", chunks, collection="ctx", uid=UID)
+    finally:
+        client.close()
+
+
+def test_a_plain_index_is_never_reused_for_a_contextual_run():
+    from qdrant_client import QdrantClient
+    from evaluation.corpus import index_corpus
+
+    chunks, headers = _header_corpus()
+    embed = lambda texts, input_type: [[1.0, 0.0] for _ in texts]
+    client = QdrantClient(":memory:")
+    try:
+        index_corpus(client, chunks, embed, "test-model", 2, collection="shared")
+        # Plain indexes keep their original metadata, so ones already built stay valid.
+        assert "embedding_format" not in client.get_collection("shared").config.metadata
+        with pytest.raises(ValueError, match="metadata"):
+            index_corpus(client, chunks, embed, "test-model", 2, collection="shared", headers=headers)
+    finally:
+        client.close()

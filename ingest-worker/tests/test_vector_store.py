@@ -232,3 +232,85 @@ def test_large_document_is_embedded_within_the_batch_cap(qdrant_client, fake_spa
 
     stored = get_user_chunks(qdrant_client, "user-big", "doc-big")
     assert len(stored) == 300  # every chunk embedded and stored, no batch lost
+
+
+# --- Slice 6: contextual headers — the section path is part of what gets embedded ---
+# Real corpora (UDA: 92% of chunks) split a section into several chunks and only the
+# first keeps its `#` lines, so most chunks have no idea which company or section they
+# belong to. These chunks are built directly with the metadata the chunker gives them.
+
+def _recording(embed):
+    """Wrap an embedder so a test can see exactly which texts were sent to it."""
+    calls = []
+
+    def wrapped(texts, *args, **kwargs):
+        calls.append(list(texts))
+        return embed(texts, *args, **kwargs)
+
+    return wrapped, calls
+
+
+def _acme_chunk(body="Net sales were 5.4 billion.", **metadata):
+    meta = {"title": "Acme Corp Annual Report", "section_title": "Results", **metadata}
+    return Chunk(body, meta, 0, "doc-1")
+
+
+def test_embeddings_cover_the_section_path_and_the_content(qdrant_client, fake_embedder, fake_sparse_embedder):
+    dense, dense_calls = _recording(fake_embedder)
+    sparse, sparse_calls = _recording(fake_sparse_embedder)
+    chunk = _acme_chunk()
+
+    write_user_chunks(qdrant_client, dense, sparse, "user-ctx", "doc-1", [chunk])
+
+    # Both the dense (Voyage) and the sparse (BM25) side see header + body.
+    for calls in (dense_calls, sparse_calls):
+        assert calls == [["Acme Corp Annual Report > Results\n\nNet sales were 5.4 billion."]]
+    # The stored content stays the raw chunk: Sources and citations show what the document says.
+    (stored,) = get_user_chunks(qdrant_client, "user-ctx", "doc-1")
+    assert stored["content"] == "Net sales were 5.4 billion."
+
+
+def test_a_word_only_in_the_header_finds_the_chunk(qdrant_client, fake_embedder, fake_sparse_embedder):
+    # "Which company?" lives in the title, not in the chunk text: the failure
+    # contextual headers fix. Same-shaped bodies, different companies.
+    companies = ["Globex", "Initech", "Umbrella", "Hooli", "Stark", "Wayne", "Acme"]
+    for number, company in enumerate(companies):
+        doc_id = f"doc-{company.lower()}"
+        sales = "8.8" if company == "Acme" else f"{number}.4"  # values chosen so the dense side alone ranks Acme 6th of 7
+        chunk = Chunk(f"Net sales were {sales} billion.", {"title": f"{company} Annual Report"}, 0, doc_id)
+        write_user_chunks(qdrant_client, fake_embedder, fake_sparse_embedder, "user-ctx", doc_id, [chunk])
+
+    results = query_user_chunks(qdrant_client, fake_embedder, fake_sparse_embedder, "user-ctx", "Acme", n_results=1)
+
+    assert [r["metadata"]["docId"] for r in results] == ["doc-acme"]
+
+
+def test_each_point_records_its_embedding_format_and_header(qdrant_client, fake_embedder, fake_sparse_embedder):
+    # Chunks written before contextual headers carry neither field, so a re-embed
+    # migration can find exactly the rows still embedded the old way.
+    chunks = [_acme_chunk(), Chunk("A paragraph with no headings.", {}, 1, "doc-1")]
+
+    write_user_chunks(qdrant_client, fake_embedder, fake_sparse_embedder, "user-ctx", "doc-1", chunks)
+
+    stored = {s["metadata"]["chunk_index"]: s["metadata"] for s in get_user_chunks(qdrant_client, "user-ctx", "doc-1")}
+    assert stored[0]["embedding_format"] == "contextual-v1"
+    assert stored[0]["context_header"] == "Acme Corp Annual Report > Results"
+    assert stored[1]["embedding_format"] == "contextual-v1"
+    assert stored[1]["context_header"] == ""
+
+
+def test_write_logs_how_many_chunks_got_a_header(qdrant_client, fake_embedder, fake_sparse_embedder, caplog):
+    import logging
+
+    chunks = [_acme_chunk(), _acme_chunk("Operating income was 1.1 billion."), Chunk("No headings here.", {}, 2, "doc-1")]
+
+    with caplog.at_level(logging.DEBUG, logger="retrieval"):
+        write_user_chunks(qdrant_client, fake_embedder, fake_sparse_embedder, "user-log", "doc-log", chunks)
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "retrieval"]
+    summary = next(m for m in lines if "contextual headers" in m)
+    assert "user=user-log" in summary and "doc=doc-log" in summary
+    assert "2/3 chunks" in summary and "format=contextual-v1" in summary
+    assert "avg header 33 chars" in summary  # len("Acme Corp Annual Report > Results"), over the 2 headed chunks
+    sample = next(m for m in lines if "embedding input sample" in m)
+    assert "Acme Corp Annual Report > Results" in sample and "Net sales were 5.4 billion." in sample

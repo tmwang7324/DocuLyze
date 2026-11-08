@@ -2,7 +2,7 @@
 
 import hashlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pathlib import Path
 
@@ -30,10 +30,11 @@ EMBED_DIM = 8
 
 @dataclass
 class FakeChunk:
-    """The shape write_user_chunks reads: content, tokens, breadcrumb()."""
+    """The shape write_user_chunks reads: content, tokens, metadata (heading names), breadcrumb()."""
 
     content: str
     tokens: int = 10
+    metadata: dict = field(default_factory=dict)
 
     def breadcrumb(self) -> str:
         return "Fixture"

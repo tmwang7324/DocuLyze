@@ -14,6 +14,7 @@ import logging
 import uuid
 
 from retrieval.config import embedding_dim, embedding_model, qdrant_api_key, qdrant_url
+from retrieval.context import EMBEDDING_FORMAT, context_header, embedding_text
 
 log = logging.getLogger("retrieval")
 
@@ -88,7 +89,16 @@ def write_user_chunks(client, embed_fn, sparse_embed_fn, uid: str, doc_id: str, 
     if not chunks:
         return
 
-    contents = [c.content for c in chunks]
+    headers = [context_header(c.metadata, c.content) for c in chunks]
+    contents = [embedding_text(h, c.content) for h, c in zip(headers, chunks)]
+    headed = [i for i, h in enumerate(headers) if h]
+    log.info(
+        "contextual headers for user=%s doc=%s: %d/%d chunks have a header (avg header %d chars), format=%s",
+        uid, doc_id, len(headed), len(chunks),
+        sum(len(headers[i]) for i in headed) // len(headed) if headed else 0, EMBEDDING_FORMAT,
+    )
+    if headed:
+        log.debug("embedding input sample (chunk %d of %s/%s): %.300r", headed[0], uid, doc_id, contents[headed[0]])
     dense: list = []
     for i in range(0, len(chunks), EMBED_BATCH):
         batch = slice(i, i + EMBED_BATCH)
@@ -112,6 +122,8 @@ def write_user_chunks(client, embed_fn, sparse_embed_fn, uid: str, doc_id: str, 
                 "chunk_index": idx,
                 "token_count": c.tokens,
                 "embedding_model": model,
+                "embedding_format": EMBEDDING_FORMAT,
+                "context_header": headers[idx],
                 "breadcrumb": c.breadcrumb(),
                 "content": c.content,
             },

@@ -151,3 +151,19 @@ def test_cli_refuses_network_without_live_flag():
     result = subprocess.run([sys.executable, "-m", "evaluation.uda"], capture_output=True, text=True)
     assert result.returncode != 0
     assert "--live" in result.stderr
+
+
+def test_corpus_headers_come_from_the_production_function(tmp_path):
+    para = " ".join(f"Sentence {i} about the quarterly results and outlook." for i in range(14))
+    (tmp_path / "acme.md").write_text(f"# Acme Annual Report\n\n## Results\n\n{para}\n\n## Outlook\n\n{para}\n",
+                                      encoding="utf-8")
+    source = {"metadata": {"source_documents": [{"doc_name": "acme"}]}}
+
+    chunks, breadcrumbs, headers = uda.load_corpus_with_headers(source, tmp_path)
+
+    # Chunk 0 still has both `#` lines; chunk 1 lost its title, so the header restores it.
+    assert headers == {("acme", 0): "", ("acme", 1): "Acme Annual Report"}
+    assert sorted(headers) == sorted(breadcrumbs)
+    # The fingerprinted chunk dicts and the old two-value loader are unchanged.
+    assert set(chunks[0]) == {"document", "chunk_index", "content"}
+    assert uda.load_corpus(source, tmp_path) == (chunks, breadcrumbs)

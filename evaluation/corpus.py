@@ -51,17 +51,29 @@ def propose_legacy_labels(source, chunks):
 
 
 def index_corpus(client, chunks, embed, model, dimension, *, collection=COLLECTION, uid=UID,
-                 chunker_version=CHUNKER_VERSION, sparse_embed=None, sparse_model=None):
+                 chunker_version=CHUNKER_VERSION, sparse_embed=None, sparse_model=None, headers=None):
     """Embed and upsert every chunk into an evaluation collection, resuming a matching one.
 
     With `sparse_embed`, each point also gets a BM25 sparse vector (server-side IDF), as
-    production stores them, so the collection can serve hybrid retrieval."""
+    production stores them, so the collection can serve hybrid retrieval.
+
+    With `headers` ({(document, chunk_index): heading path}), each chunk is embedded as
+    production embeds it (retrieval.context.embedding_text: header, then text) and the
+    collection records the embedding format, so a plain index is never reused for it.
+    The chunk dicts, and so the corpus fingerprint, stay raw content only."""
     if not chunks or len({(c["document"], c["chunk_index"]) for c in chunks}) != len(chunks):
         raise ValueError("Corpus must contain uniquely identified chunks")
     metadata = {"purpose": "doculyze-evaluation", "corpus_version": corpus_version(chunks),
                 "chunker_version": chunker_version, "embedding_model": model}
     if sparse_embed is not None:
         metadata["sparse_model"] = sparse_model or "unknown"
+    if headers is not None:
+        from retrieval.context import EMBEDDING_FORMAT, embedding_text
+
+        metadata["embedding_format"] = EMBEDDING_FORMAT
+        LOG.info("Contextual headers: %d/%d chunks have a header (format %s)",
+                 sum(bool(headers.get((c["document"], c["chunk_index"]))) for c in chunks), len(chunks),
+                 EMBEDDING_FORMAT)
     if client.collection_exists(collection):
         actual = client.get_collection(collection).config.metadata or {}
         if any(actual.get(key) != value for key, value in metadata.items()):
@@ -77,7 +89,9 @@ def index_corpus(client, chunks, embed, model, dimension, *, collection=COLLECTI
     client.create_payload_index(collection, "userId", PayloadSchemaType.KEYWORD, wait=True)
     for start in range(0, len(chunks), 32):
         batch = chunks[start:start + 32]
-        texts = [chunk["content"] for chunk in batch]
+        texts = [chunk["content"] if headers is None
+                 else embedding_text(headers.get((chunk["document"], chunk["chunk_index"]), ""), chunk["content"])
+                 for chunk in batch]
         vectors = embed(texts, input_type="document")
         if len(vectors) != len(batch) or any(len(vector) != dimension for vector in vectors):
             raise ValueError("Embedding count or dimension does not match corpus batch")
@@ -87,6 +101,8 @@ def index_corpus(client, chunks, embed, model, dimension, *, collection=COLLECTI
             key = f"{collection}/{uid}/{chunk['document']}/{chunk['chunk_index']}"
             payload = {"userId": uid, "docId": chunk["document"],
                        "chunk_index": chunk["chunk_index"], "content": chunk["content"]}
+            if headers is not None:
+                payload["context_header"] = headers.get((chunk["document"], chunk["chunk_index"]), "")
             vector_data = {"dense": vector} if sparse_vector is None else {"dense": vector, "sparse": sparse_vector}
             points.append(PointStruct(id=str(uuid.uuid5(uuid.NAMESPACE_URL, key)), vector=vector_data, payload=payload))
         client.upsert(collection, points, wait=True)

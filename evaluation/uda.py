@@ -42,6 +42,7 @@ LABELS = ROOT / "evaluation" / "uda_labels.json"
 RESULTS = ROOT / "evaluation" / "results"
 
 COLLECTION = "uda_eval_chunks"
+COLLECTION_CONTEXT = "uda_eval_chunks_ctx"  # embedded with contextual headers (--headers)
 UID = "uda-eval"
 HF_EVIDENCE = "https://huggingface.co/datasets/qinchuanhui/UDA-QA/resolve/main/extended_qa_info/"
 SUBSET_FILES = {"tathybrid": "tat_qa.json", "papertext": "paper_text_qa.json", "papertab": "paper_tab_qa.json"}
@@ -142,22 +143,31 @@ def chunker_version():
     return f"chunk_markdown@sha256:{digest}"
 
 
-def load_corpus(source, markdown_dir=MARKDOWN):
+def load_corpus_with_headers(source, markdown_dir=MARKDOWN):
     """Chunk every UDA source document with the production chunker.
 
-    Returns (chunks, breadcrumbs): chunks carry document, chunk_index and content (the
-    fields the corpus fingerprint covers); breadcrumbs map (document, chunk_index) to the
-    chunker's breadcrumb, which production prepends to each excerpt."""
+    Returns (chunks, breadcrumbs, headers): chunks carry document, chunk_index and content
+    (the fields the corpus fingerprint covers); breadcrumbs map (document, chunk_index) to
+    the chunker's breadcrumb, which production prepends to each excerpt; headers map the
+    same keys to the heading path production embeds with the chunk (retrieval.context)."""
     sys.path.insert(0, str(ROOT / "ingest-worker" / "src"))
     from ingest.chunker import chunk_markdown
+    from retrieval.context import context_header
 
-    chunks, breadcrumbs = [], {}
+    chunks, breadcrumbs, headers = [], {}, {}
     for document in sorted(item["doc_name"] for item in source["metadata"]["source_documents"]):
         text = (markdown_dir / f"{document}.md").read_text(encoding="utf-8")
         for chunk in chunk_markdown(text, source=document):
             index = chunk.metadata["chunk_index"]
             chunks.append({"document": document, "chunk_index": index, "content": chunk.content})
             breadcrumbs[(document, index)] = chunk.breadcrumb()
+            headers[(document, index)] = context_header(chunk.metadata, chunk.content)
+    return chunks, breadcrumbs, headers
+
+
+def load_corpus(source, markdown_dir=MARKDOWN):
+    """(chunks, breadcrumbs) for every UDA source document; see load_corpus_with_headers."""
+    chunks, breadcrumbs, _ = load_corpus_with_headers(source, markdown_dir)
     return chunks, breadcrumbs
 
 
@@ -363,8 +373,12 @@ def _local_qdrant(path):
     return QdrantClient(path=str(path))
 
 
-def prepare_index(client, chunks, labels, strategy):
-    """Index the corpus into the local evaluation collection unless an identical one exists."""
+def prepare_index(client, chunks, labels, strategy, headers=None):
+    """Index the corpus into the local evaluation collection unless an identical one exists.
+
+    With `headers`, chunks are embedded with their heading path (production's format) into
+    their own collection, so a contextual run never reads a plain index or the reverse."""
+    collection = COLLECTION if headers is None else COLLECTION_CONTEXT
     sys.path.insert(0, str(ROOT / "ingest-worker" / "src"))
     from ingest.mytests.eval_support import create_dense_embedder, create_sparse_embedder
     from retrieval.config import embedding_dim, embedding_model
@@ -376,13 +390,14 @@ def prepare_index(client, chunks, labels, strategy):
     sparse = create_sparse_embedder()
     expected = {"corpus_version": labels["corpus_version"], "chunker_version": labels["chunker_version"]}
     try:
-        validate_collection(client, expected, embedding_model(), chunks, collection=COLLECTION, uid=UID)
-        LOG.info("Reusing the local evaluation index (%d chunks)", len(chunks))
+        validate_collection(client, expected, embedding_model(), chunks, collection=collection, uid=UID)
+        LOG.info("Reusing the local evaluation index %s (%d chunks)", collection, len(chunks))
     except Exception:
-        LOG.info("Indexing %d chunks into the local evaluation collection", len(chunks))
-        index_corpus(client, chunks, dense, embedding_model(), embedding_dim(), collection=COLLECTION, uid=UID,
-                     chunker_version=labels["chunker_version"], sparse_embed=sparse, sparse_model="Qdrant/bm25")
-        validate_collection(client, expected, embedding_model(), chunks, collection=COLLECTION, uid=UID)
+        LOG.info("Indexing %d chunks into the local evaluation collection %s", len(chunks), collection)
+        index_corpus(client, chunks, dense, embedding_model(), embedding_dim(), collection=collection, uid=UID,
+                     chunker_version=labels["chunker_version"], sparse_embed=sparse, sparse_model="Qdrant/bm25",
+                     headers=headers)
+        validate_collection(client, expected, embedding_model(), chunks, collection=collection, uid=UID)
     return dense, sparse, embedding_model()
 
 
@@ -451,6 +466,8 @@ def main():
     parser.add_argument("--allow-unreviewed", action="store_true",
                         help="Score unreviewed mappings; results are marked provisional")
     parser.add_argument("--ragas", action="store_true", help="Also generate answers and score them with RAGAS")
+    parser.add_argument("--headers", action="store_true",
+                        help="Embed each chunk with its heading path, as production does (own collection)")
     parser.add_argument("--scope", choices=("corpus", "document"), default="corpus",
                         help="Search the whole UDA corpus (default) or only each case's source document, "
                              "as a Conversation pinned to that document would")
@@ -468,7 +485,7 @@ def main():
         LOG.info("Imported evidence for %d cases", len(evidence["cases"]))
         return 0
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    chunks, breadcrumbs = load_corpus(source)
+    chunks, breadcrumbs, headers = load_corpus_with_headers(source)
     if args.propose:
         with args.propose.open("x", encoding="utf-8") as output:
             json.dump(propose_labels(evidence, chunks), output, ensure_ascii=False, indent=2)
@@ -486,10 +503,11 @@ def main():
     from ingest.mytests.eval_support import query_dense, query_hybrid
 
     client = _local_qdrant(args.index_path)
-    dense, sparse, model = prepare_index(client, chunks, labels, args.strategy)
+    collection = COLLECTION_CONTEXT if args.headers else COLLECTION
+    dense, sparse, model = prepare_index(client, chunks, labels, args.strategy, headers if args.headers else None)
     documents = {case["id"]: evidence["cases"][case["id"]]["document"] for case in cases}
     config = {"benchmark": "uda", "strategy": args.strategy, "scope": args.scope,
-              "collection": f"{COLLECTION} (local)",
+              "collection": f"{collection} (local)", "contextual_headers": args.headers,
               "embedding_model": model, "sparse_model": "Qdrant/bm25" if args.strategy == "hybrid" else None,
               "corpus_version": labels["corpus_version"], "chunker_version": labels["chunker_version"],
               "mapping_method": labels.get("proposal_method"),
@@ -503,9 +521,9 @@ def main():
     def retrieve(question, limit):
         doc_id = scope_by_question[question] if args.scope == "document" else None
         if args.strategy == "dense":
-            hits = query_dense(client, COLLECTION, dense, question, UID, doc_id=doc_id, limit=limit)
+            hits = query_dense(client, collection, dense, question, UID, doc_id=doc_id, limit=limit)
         else:
-            hits = query_hybrid(client, COLLECTION, dense, sparse, question, UID, doc_id=doc_id, limit=limit)
+            hits = query_hybrid(client, collection, dense, sparse, question, UID, doc_id=doc_id, limit=limit)
         return [{"document": hit["metadata"]["docId"], "chunk_index": hit["metadata"]["chunk_index"],
                  "content": hit["content"], "score": hit["score"],
                  "breadcrumb": breadcrumbs.get((hit["metadata"]["docId"], hit["metadata"]["chunk_index"]), "")}
@@ -529,7 +547,7 @@ def main():
         ragas_summary = rs.aggregate_ragas(rows)
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = args.output or RESULTS / f"uda-{args.strategy}-{args.scope}-{stamp}"
+    run_dir = args.output or RESULTS / f"uda-{args.strategy}-{args.scope}{'-ctx' if args.headers else ''}-{stamp}"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "retrieval.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if rows is not None:

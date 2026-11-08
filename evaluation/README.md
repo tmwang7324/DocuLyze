@@ -124,7 +124,13 @@ contents against the corpus fingerprint. Choose `--strategy dense|hybrid`
 (production RRF fusion) and `--scope corpus|document`. UDA questions are written
 per document ("the company", "they"), so `corpus` scope makes them ambiguous
 across the 17 filings and papers. `document` scope searches only the case's source
-document, as a Conversation pinned to it would. Each run writes `retrieval.json`,
+document, as a Conversation pinned to it would. `--headers` embeds every chunk the
+way production ingest does: its heading path (`Title > Section > Subsection`,
+from `retrieval.context`) is prepended to the text the dense and BM25 embedders see,
+while the stored and cited content stays raw. It uses its own collection
+(`uda_eval_chunks_ctx`), so a contextual run never reads a plain index. The corpus
+fingerprint covers raw chunk text only, so the reviewed labels stay valid for both.
+Run both and compare to measure what the headers change. Each run writes `retrieval.json`,
 `ragas.json`, `calibration.json` and `summary.md` under `evaluation/results/`, which
 is ignored. `summary.md` contains no corpus text. Summaries from the first runs are
 committed in `evaluation/reports/`.
