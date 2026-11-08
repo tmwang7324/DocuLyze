@@ -16,7 +16,7 @@ It is built as separate services: a Next.js web app, a Python ingest pipeline be
 | Retrieval evaluation harness | Built |
 | Chat service (Redis cache, SSE token streaming, Qwen 2.5 14B via Ollama) | Built |
 | CI/CD with GitHub Actions | Built |
-| Kubernetes deployment with autoscaling | In progress (manifests not yet in the repo) |
+| Kubernetes deployment with autoscaling | Built |
 
 ## Architecture
 
