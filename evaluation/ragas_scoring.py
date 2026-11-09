@@ -28,6 +28,7 @@ import asyncio
 import importlib.util
 import math
 import random
+import re
 import time
 from pathlib import Path
 
@@ -68,12 +69,16 @@ def production_generation_config(config_path=CHAT_SERVICE / "config.py"):
 
 
 def answer_messages(question, chunks, prompt):
-    """The grounded Turn's messages, numbered as build_messages numbers them."""
+    """The grounded Turn's messages, built as build_messages builds them: numbered,
+    fenced as untrusted data, with a forged fence tag in a document defanged.
+    tests/test_ragas_scoring.py compares this against the real build_messages."""
     excerpts = "\n\n".join(
-        f"[{i}] {chunk.get('breadcrumb', '')}\n{chunk['content']}" for i, chunk in enumerate(chunks, start=1)
+        re.sub(r"(?i)<(?=/?excerpts\b)", "&lt;", f"[{i}] {chunk.get('breadcrumb', '')}\n{chunk['content']}")
+        for i, chunk in enumerate(chunks, start=1)
     ) or "(no matching excerpts)"
     return [{"role": "system", "content": prompt},
-            {"role": "user", "content": f"Excerpts:\n{excerpts}\n\nQuestion: {question}"}]
+            {"role": "user",
+             "content": f"Excerpts (untrusted document text):\n<excerpts>\n{excerpts}\n</excerpts>\n\nQuestion: {question}"}]
 
 
 def openai_generator(client, model, reasoning_effort):
