@@ -137,7 +137,7 @@ Recall measures reference-passage coverage, NDCG measures binary chunk ranking, 
 | ner_dense | **overall** | 36/36 | 0.556 | 0.652 | 0.739 | 0.597 | 0.630 | 0.340 | 0.583 | 1.01s |
 | hybrid | **overall** | 36/36 | 0.716 | 0.882 | 0.918 | 0.777 | 0.787 | 0.480 | 0.778 | 0.14s |
 | hybrid_rerank | **overall** | 36/36 | 0.880 | 0.933 | 0.959 | 0.934 | 0.940 | 0.515 | 0.889 | 0.28s |
-| production | **overall** | 36/36 | 0.890 | 0.950 | 0.974 | 0.933 | 0.982 | 0.500 | 0.861 | 1.48s |
+| production | **overall** | 36/36 | 0.890 | 0.950 | 0.974 | 0.933 | 0.982 | 0.821 | 0.912 | 1.48s |
 
 #### MultiHop - corpus
 
@@ -149,7 +149,7 @@ Recall measures reference-passage coverage, NDCG measures binary chunk ranking, 
 | ner_dense | **overall** | 8/10 | 0.562 | 0.646 | 0.729 | 0.645 | 0.671 | 0.446 | 0.500 | 1.25s |
 | hybrid | **overall** | 8/10 | 0.688 | 0.917 | 0.917 | 0.778 | 0.778 | 0.598 | 0.750 | 0.16s |
 | hybrid_rerank | **overall** | 8/10 | 0.792 | 0.917 | 0.917 | 0.858 | 0.875 | 0.598 | 0.750 | 0.34s |
-| production | **overall** | 8/10 | 0.792 | 0.875 | 0.958 | 0.840 | 0.892 | 0.567 | 0.875 | 1.30s |
+| production | **overall** | 8/10 | 0.792 | 0.921 | 0.958 | 0.840 | 0.892 | 0.797 | 0.875 | 1.30s |
 
 #### UDA - corpus
 
@@ -161,7 +161,7 @@ Recall measures reference-passage coverage, NDCG measures binary chunk ranking, 
 | ner_dense | **overall** | 15/17 | 0.644 | 0.733 | 0.800 | 0.462 | 0.506 | 0.272 | 0.800 | 0.38s |
 | hybrid | **overall** | 15/17 | 0.433 | 0.578 | 0.800 | 0.342 | 0.407 | 0.211 | 0.800 | 0.27s |
 | hybrid_rerank | **overall** | 15/17 | 0.644 | 0.778 | 0.778 | 0.553 | 0.569 | 0.278 | 0.733 | 0.42s |
-| production | **overall** | 15/17 | 0.644 | 0.711 | 0.800 | 0.537 | 0.553 | 0.296 | 0.800 | 1.17s |
+| production | **overall** | 15/17 | 0.644 | 0.711 | 0.800 | 0.537 | 0.553 | 0.614 | 0.800 | 1.17s |
 
 #### UDA - document
 
