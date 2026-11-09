@@ -195,6 +195,13 @@ export default function ArchiveView({
                                     {row.addedLabel}
                                 </td>
                                 <td className="px-5 py-4 whitespace-nowrap">
+                                    {row.status !== "deleting" && (
+                                        <a
+                                            href={`/api/documents/${encodeURIComponent(row.docId)}/open?download=1`}
+                                            aria-label={`Download ${row.title}`}
+                                            className="font-mono-label text-[10px] tracking-wider uppercase text-dark hover:underline mr-5"
+                                        >Download</a>
+                                    )}
                                     <button
                                         type="button"
                                         onClick={() => requestRemoval(row)}
