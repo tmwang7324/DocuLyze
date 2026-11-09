@@ -24,13 +24,13 @@ function requireDocumentId(docId: string): string {
     return docId;
 }
 
-function contentDisposition(fileName: string, download: boolean): string {
+function contentDisposition(fileName: string): string {
     const fallback = fileName
         .normalize("NFKD")
         .replace(/[^\x20-\x7E]/g, "_")
         .replace(/["\\\r\n]/g, "_") || "document";
 
-    const disposition = !download && /\.pdf$/i.test(fileName) ? "inline" : "attachment";
+    const disposition = /\.pdf$/i.test(fileName) ? "inline" : "attachment";
     return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
@@ -39,7 +39,7 @@ function contentDisposition(fileName: string, download: boolean): string {
  * bytes. The Storage path is derived from the verified user and document ID;
  * no client-supplied path is trusted.
  */
-export async function getReadPresignedURL(docId: string, download = false): Promise<string> {
+export async function getReadPresignedURL(docId: string): Promise<string> {
     return runWithRequestContext(async () => {
         const startedAt = Date.now();
         logOperationalEvent("info", { operation: "getReadPresignedURL", lifecycle: "started" });
@@ -69,7 +69,7 @@ export async function getReadPresignedURL(docId: string, download = false): Prom
                 action: "read",
                 version: "v4",
                 expires: Date.now() + READ_URL_TTL_MS,
-                responseDisposition: contentDisposition(fileName, download),
+                responseDisposition: contentDisposition(fileName),
                 ...( /\.pdf$/i.test(fileName) ? { responseType: "application/pdf" } : {} ),
             });
 

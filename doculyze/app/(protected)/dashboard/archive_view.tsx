@@ -167,7 +167,9 @@ export default function ArchiveView({
                                             {row.title}
                                         </a>
                                     )}
-                                    <div className="text-muted text-sm mt-0.5">{row.fileName}</div>
+                                    {row.title !== row.fileName && (
+                                        <div className="text-muted text-sm mt-0.5">{row.fileName}</div>
+                                    )}
                                     {/* The real Firestore id. The prototype showed a
                                         decorative one derived from the row index. */}
                                     <div className="font-mono-label text-placeholder text-[10px] tracking-wider mt-1">
@@ -195,13 +197,6 @@ export default function ArchiveView({
                                     {row.addedLabel}
                                 </td>
                                 <td className="px-5 py-4 whitespace-nowrap">
-                                    {row.status !== "deleting" && (
-                                        <a
-                                            href={`/api/documents/${encodeURIComponent(row.docId)}/open?download=1`}
-                                            aria-label={`Download ${row.title}`}
-                                            className="font-mono-label text-[10px] tracking-wider uppercase text-dark hover:underline mr-5"
-                                        >Download</a>
-                                    )}
                                     <button
                                         type="button"
                                         onClick={() => requestRemoval(row)}

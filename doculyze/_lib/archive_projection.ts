@@ -141,7 +141,7 @@ export function projectArchive(records: ArchiveInput[]): {
         const { label, tone } = statusOf(record.status);
         return {
             docId: record.docId,
-            title: record.title,
+            title: record.title?.trim() || record.file_name?.trim() || "Untitled document",
             fileName: record.file_name,
             status: record.status,
             type,

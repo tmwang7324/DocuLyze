@@ -34,11 +34,3 @@ it.each([["notes.pdf", "inline", "application/pdf"], ["page.html", "attachment",
     }));
   },
 );
-
-it("forces PDF downloads to use an attachment disposition", async () => {
-  mocks.get.mockResolvedValue({ exists: true, get: (key: string) => key === "file_name" ? "notes.pdf" : "ready" });
-  await getReadPresignedURL("doc-a", true);
-  expect(mocks.getSignedUrl).toHaveBeenCalledWith(expect.objectContaining({
-    responseDisposition: expect.stringMatching(/^attachment;/),
-  }));
-});
