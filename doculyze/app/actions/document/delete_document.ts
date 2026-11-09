@@ -24,13 +24,14 @@ function requireDocumentId(docId: string): string {
     return docId;
 }
 
-function attachmentDisposition(fileName: string): string {
+function contentDisposition(fileName: string): string {
     const fallback = fileName
         .normalize("NFKD")
         .replace(/[^\x20-\x7E]/g, "_")
         .replace(/["\\\r\n]/g, "_") || "document";
 
-    return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+    const disposition = /\.pdf$/i.test(fileName) ? "inline" : "attachment";
+    return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 /**
@@ -68,7 +69,8 @@ export async function getReadPresignedURL(docId: string): Promise<string> {
                 action: "read",
                 version: "v4",
                 expires: Date.now() + READ_URL_TTL_MS,
-                responseDisposition: attachmentDisposition(fileName),
+                responseDisposition: contentDisposition(fileName),
+                ...( /\.pdf$/i.test(fileName) ? { responseType: "application/pdf" } : {} ),
             });
 
             logOperationalEvent("info", {

@@ -9,7 +9,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { getReadPresignedURL, removeDocument } from "@/app/actions/document/delete_document";
+import { removeDocument } from "@/app/actions/document/delete_document";
 import {
     filterAndSort,
     type ArchiveQuery,
@@ -41,24 +41,8 @@ export default function ArchiveView({
 }) {
     const [query, setQuery] = useState("");
     const [sort, setSort] = useState<Sort>("recent");
-    const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
     const [removingDocId, setRemovingDocId] = useState<string | null>(null);
     const router = useRouter();
-
-    async function downloadDocument(event: React.MouseEvent<HTMLAnchorElement>, docId: string) {
-        event.preventDefault();
-        if (downloadingDocId) return;
-
-        setDownloadingDocId(docId);
-        try {
-            const url = await getReadPresignedURL(docId);
-            window.location.assign(url);
-        } catch {
-            toast.error("The document could not be downloaded.");
-        } finally {
-            setDownloadingDocId(null);
-        }
-    }
 
     async function requestRemoval(row: ArchiveRow) {
         if (removingDocId || row.status === "deleting") return;
@@ -175,12 +159,12 @@ export default function ArchiveView({
                                         </span>
                                     ) : (
                                         <a
-                                            href="#"
-                                            onClick={(event) => downloadDocument(event, row.docId)}
-                                            aria-busy={downloadingDocId === row.docId}
+                                            href={`/api/documents/${encodeURIComponent(row.docId)}/open`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
                                             className="font-display text-lg font-bold uppercase text-dark leading-tight underline decoration-1 underline-offset-4 hover:text-orange-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange-primary"
                                         >
-                                            {downloadingDocId === row.docId ? "Preparing download…" : row.title}
+                                            {row.title}
                                         </a>
                                     )}
                                     <div className="text-muted text-sm mt-0.5">{row.fileName}</div>
