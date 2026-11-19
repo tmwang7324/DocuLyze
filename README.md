@@ -2,7 +2,7 @@
 
 DocuLyze is a study tool my friends and I use to get through course material faster. You upload lecture notes, papers, slides, or code, and DocuLyze turns them into a searchable knowledge base you can ask questions against, with answers grounded in your own documents (retrieval-augmented generation).
 
-It is built as separate services: a Next.js web app, a Python ingest pipeline behind a RabbitMQ queue, and (in progress) a chat service that generates answers locally with Qwen 2.5 through Ollama.
+It is built as separate services: a Next.js web app, a Python ingest pipeline behind a RabbitMQ queue, and a chat service that generates answers locally with API GPT calls.
 
 ## Status
 
@@ -45,9 +45,9 @@ flowchart LR
     worker --> qdrant
     web -->|SSE progress| browser
     browser -.-> chat
-    chat -.-> qdrant
+    chat -.-> chroma
     chat -.-> redis
-    chat -.-> ollama
+    chat -.-> gpt
 
     classDef planned stroke-dasharray: 5 5
 ```
@@ -87,7 +87,7 @@ A document that is temporarily busy goes to a retry queue and comes back after f
 The chat service runs as its own backend:
 
 - Retrieve with Qdrant hybrid search (dense + BM25, fused with RRF), optionally reranked with Voyage `rerank-3-lite`.
-- Generate answers locally with **Qwen 2.5 14B served by Ollama**, so study material never leaves our machines for generation.
+- Generate answers with **GPT 5.4-mini** to compress context and classify need for search, as well as **GPT 5.5** for gneeration and query decomposition.
 - Conversations are saved into Firestore for persistence.
 - Stream answers token by token to the browser over **SSE**.
 
@@ -275,11 +275,13 @@ npm --prefix ../doculyze run emulators   # in a separate terminal
 
 ## Roadmap
 
-- **Chat service.** Separate backend with hybrid retrieval, reranking, Qwen 2.5 14B generation through Ollama, Redis caching, and SSE token streaming.
+- **Chat service.** Separate backend with hybrid retrieval, reranking, GPT model instruction tuning, Redis caching, and SSE token streaming.
 - **CI/CD.** GitHub Actions running the Vitest and pytest suites against the Firebase emulators on every push and pull request, then building and publishing the service images.
 - **Kubernetes.** Run the web app, ingest worker, and RabbitMQ on Kubernetes with:
   - ingest workers that **autoscale on RabbitMQ queue depth**, so a burst of uploads adds workers and an idle queue scales them back down
   - **rolling deployments** so updates ship without downtime
+ 
+## Next Steps
 - **Qwen 2.5 fine-tuning.** Fine-tune Qwen 2.5 on study-style question and answer pairs so answers stay closer to the source material.
 - **Entity-aware retrieval.** Tag chunks with named entities at ingest time and use them to boost matching results at query time.
 - **Google sign-in** alongside email and password.
@@ -303,5 +305,4 @@ This README replaces the original `PLAN.md`, which sketched a React and Express 
 
 - **MongoDB was replaced by Firestore** for metadata, with raw files in Firebase Storage.
 - **Express was replaced by Next.js server actions**, so the web app needs no separate API server.
-- **ChromaDB was replaced by Qdrant** to support hybrid dense + BM25 retrieval.
 - **The Google Natural Language API was dropped.** It couldn't extract concepts and struggled with Markdown tables, so entity extraction moved to a local LLM.
